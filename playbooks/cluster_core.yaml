@@ -1,0 +1,131 @@
+---
+# Kubernetes cluster bootstrap through kubeconfig (atlas-k8s-core)
+# Helm bootstrap and CNI (Calico) live in the sibling atlas-k8s-addons repo
+# (roles 30_helm_bootstrap, 31_calico).
+# Standalone vars: group_vars / inventory (see README / SECURITY.md).
+# Targeting: k8s_lb_hosts / k8s_master_hosts / k8s_worker_hosts (inventory group names;
+# defaults match inventory-example.yml).
+
+- hosts: localhost
+  gather_facts: false
+  tags: [00_ensure_workspace]
+  roles:
+    - role: 00_ensure_workspace
+
+- hosts: localhost
+  connection: local
+  gather_facts: true
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 00_controller_tooling
+      tags: 00_controller_tooling
+
+- hosts: localhost
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 01_validate_vars
+      tags: 01_validate_vars
+
+- hosts: "{{ k8s_lb_hosts | default('k8s_lbs') }}:{{ k8s_master_hosts | default('k8s_masters') }}:{{ k8s_worker_hosts | default('k8s_workers') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  gather_facts: false
+  strategy: free
+  roles:
+    - role: 02_gather_facts
+      tags: [always, 02_gather_facts, gather_facts]
+    - role: 03_sync_time
+      tags: 03_sync_time
+
+# Optional: {{ k8s_lb_hostname }} → vip_address via Terraform RFC2136
+# (k8s_lb_dns_tf_manage_a_record). Default false — BIND / manual DNS owns apex A.
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 09_lb_vip_dns
+      tags: 09_lb_vip_dns
+
+- hosts: "{{ k8s_lb_hosts | default('k8s_lbs') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  strategy: free
+  roles:
+    - role: 10_lb
+      tags: 10_lb
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}:{{ k8s_worker_hosts | default('k8s_workers') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  gather_facts: true
+  strategy: free
+  roles:
+    - role: 11_k8s_hosts
+      tags: 11_k8s_hosts
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}:{{ k8s_worker_hosts | default('k8s_workers') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  gather_facts: true
+  strategy: linear
+  roles:
+    - role: 04_cluster_state
+      tags: 04_cluster_state
+
+- hosts: "{{ groups.get(k8s_master_hosts | default('k8s_masters'), ['no_hosts'])[0] }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  strategy: free
+  roles:
+    - role: 21_kubeadm_init
+      tags: 21_kubeadm_init
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 22_cluster_join_token
+      tags: 22_cluster_join_token
+
+- hosts: localhost
+  connection: local
+  gather_facts: false
+  environment: "{{ controller_tls_environment | default({}) }}"
+  roles:
+    - role: 29_fetch_kubeconfig
+      tags: 29_fetch_kubeconfig
+
+- hosts: "{{ (groups.get(k8s_master_hosts | default('k8s_masters'), [])[1:] | join(',')) | default('no_hosts', true) }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  serial: 1
+  roles:
+    - role: 23_join_masters
+      tags: 23_join_masters
+
+- hosts: "{{ k8s_worker_hosts | default('k8s_workers') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  roles:
+    - role: 24_join_workers
+      tags: 24_join_workers
+    - role: 12_workers_kernel_rbd
+      tags: 12_workers_kernel_rbd
+
+- hosts: "{{ k8s_master_hosts | default('k8s_masters') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  serial: 1
+  roles:
+    - role: 25_kubeadm_upgrade_control_plane
+      tags: 25_kubeadm_upgrade_control_plane
+
+- hosts: "{{ k8s_worker_hosts | default('k8s_workers') }}"
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  become: true
+  serial: 1
+  roles:
+    - role: 26_kubeadm_upgrade_workers
+      tags: 26_kubeadm_upgrade_workers

@@ -1,0 +1,31 @@
+---
+# Inventory group names (must match playbook targeting / group_vars/all/atlas-k8s-core.yml).
+k8s_lb_hosts: k8s_lbs
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# Mirrored from 09_lb_vip_dns so 01_validate_vars can assert when toggle is true
+# without requiring that role's defaults to be loaded.
+k8s_lb_dns_tf_manage_a_record: false
+k8s_lb_dns_server: >-
+  {{
+    provision_dns_server
+    | default(dns_server_ip | default('', true), true)
+  }}
+k8s_lb_dns_zone: >-
+  {{
+    provision_dns_zone
+    | default((dns_domain_suffix | default('example.com')) ~ '.', true)
+  }}
+k8s_lb_dns_key_name: >-
+  {{
+    provision_dns_key_name
+    | default((dns_domain_suffix | default('example.com')) ~ '.', true)
+  }}
+k8s_lb_dns_key_secret: "{{ provision_dns_key_secret | default('CHANGEME', true) }}"
+# Workspace stub (same path as 00_ensure_workspace / 09_lb_vip_dns). Required by
+# workspace_layout_core assert; inventory may omit it (unlike keycloak_tf_workspace).
+k8s_lb_dns_tf_workspace: "{{ controller_staging_dir }}/lb-vip-dns"
+
+# Mirrored from 10_lb: "" allowed (auto NIC); validate only requires the key defined.
+keepalived_interface: ""

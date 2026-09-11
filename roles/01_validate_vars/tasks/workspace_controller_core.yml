@@ -1,0 +1,19 @@
+---
+- name: Assert controller workspace paths are defined for core
+  ansible.builtin.assert:
+    that:
+      - controller_workspace | default('') | length > 0
+      - controller_manifests_dir | default('') | length > 0
+      - controller_reports_dir | default('') | length > 0
+      - controller_kubeconfig | default('') | length > 0
+      - controller_python_venv | default('') | length > 0
+      - controller_bin_dir | default('') | length > 0
+      - controller_helm_config_dir | default('') | length > 0
+      - k8s_cluster_fact_host | default('') | length > 0
+      - k8s_kubeadm_admin_kubeconfig | default('') | length > 0
+      - controller_manifests_dir is match('^' ~ controller_workspace)
+      - controller_reports_dir is match('^' ~ controller_workspace)
+      - controller_kubeconfig is match('^' ~ controller_workspace)
+    fail_msg: >-
+      Controller workspace variables (controller_*) are missing or inconsistent —
+      check group_vars/all/atlas-k8s-core.yml (core bootstrap)

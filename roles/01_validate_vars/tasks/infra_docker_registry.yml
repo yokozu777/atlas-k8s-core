@@ -1,0 +1,37 @@
+---
+- name: Assert use_internal_docker_registry is valid
+  ansible.builtin.assert:
+    that:
+      - use_internal_docker_registry | default('none') in ['none', 'harbor', 'registry']
+    fail_msg: >-
+      use_internal_docker_registry must be one of: none, harbor, registry
+      (got {{ use_internal_docker_registry | default('none') }})
+
+- name: Assert setup_registry flags match use_internal_docker_registry
+  ansible.builtin.assert:
+    that:
+      - (setup_registry | default(false) | bool) == (use_internal_docker_registry == 'registry')
+      - (setup_registry_nginx | default(false) | bool) == (use_internal_docker_registry == 'registry')
+    fail_msg: >-
+      setup_registry and setup_registry_nginx must equal
+      (use_internal_docker_registry == 'registry'); do not override them manually in group_vars
+
+- name: Assert harbor variables when pull mode is harbor
+  ansible.builtin.assert:
+    that:
+      - harbor_host | default('') | length > 0
+      - harbor_mirror_base | default('') | length > 0
+    fail_msg: harbor_host and harbor_mirror_base are required when use_internal_docker_registry=harbor
+  when: use_internal_docker_registry | default('none') == 'harbor'
+
+- name: Assert registry variables when pull mode is registry
+  ansible.builtin.assert:
+    that:
+      - registry_ingress_domain | default('') | length > 0
+      - containerd_registry_mirrors | default([]) | length > 0
+      - setup_stepca | default(false) | bool
+      - registry_tls_enabled | default(false) | bool
+    fail_msg: >-
+      registry_ingress_domain, containerd_registry_mirrors, setup_stepca=true and
+      registry_tls_enabled=true are required when use_internal_docker_registry=registry
+  when: use_internal_docker_registry | default('none') == 'registry'

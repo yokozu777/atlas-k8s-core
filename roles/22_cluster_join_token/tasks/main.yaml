@@ -1,0 +1,26 @@
+---
+- name: Publish join token requirement flag
+  ansible.builtin.set_fact:
+    k8s_needs_join_tokens: >-
+      {{
+        (k8s_any_needs_join | default(false) | bool)
+        or (k8s_any_needs_control_plane_join | default(false) | bool)
+      }}
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  run_once: true
+
+- name: Skip join token generation when cluster has no pending joins
+  ansible.builtin.debug:
+    msg: No nodes require join; skipping token generation
+  when: not (hostvars[k8s_cluster_fact_host]['k8s_needs_join_tokens'] | default(false) | bool)
+
+- name: Generate worker join command prefetch when nodes require join
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/kubeadm_generate_join_commands.yaml"
+  vars:
+    kubeadm_join_run_host: "{{ groups[k8s_master_hosts][0] }}"
+    kubeadm_join_fact_host: "{{ k8s_cluster_fact_host }}"
+    kubeadm_join_generate_control_plane_cmd: false
+  when: hostvars[k8s_cluster_fact_host]['k8s_needs_join_tokens'] | default(false) | bool

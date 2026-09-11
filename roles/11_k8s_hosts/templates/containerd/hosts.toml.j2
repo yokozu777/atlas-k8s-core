@@ -1,0 +1,14 @@
+server = "{{ item.server }}"
+
+{% if item.direct | default(false) %}
+[host."{{ item.server }}"]
+  capabilities = ["pull", "resolve"]
+{% elif use_internal_docker_registry | default('none') == 'harbor' %}
+[host."{{ harbor_mirror_base }}/{{ item.mirror_path }}"]
+  capabilities = ["pull", "resolve"]
+  override_path = true
+{% elif use_internal_docker_registry | default('none') == 'registry' %}
+[host."{{ item | containerd_mirror_endpoint(registry_ingress_domain) }}"]
+  capabilities = ["pull", "resolve"]
+  # override_path must stay false: pull-through registry speaks Docker Registry /v2 API
+{% endif %}

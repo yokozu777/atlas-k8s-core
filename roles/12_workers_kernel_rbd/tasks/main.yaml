@@ -1,0 +1,28 @@
+    - name: Check if rbd module is available
+      shell: modinfo rbd
+      register: rbd_module_info
+      ignore_errors: yes    
+
+    - name: Install kernel modules on Ubuntu and Debian if rbd module is not available
+      shell: apt-get install linux-modules-extra-$(uname -r) -y
+      when: ansible_facts['distribution'] == 'Ubuntu' and rbd_module_info.failed
+
+    - name: install kernel-uek-modules-extra
+      shell: dnf install kernel-uek-modules-extra-$(uname -r) -y    
+      when: ansible_facts['distribution'] == 'OracleLinux' and rbd_module_info.failed
+
+    - name: load kernel modules rbd
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rbd
+
+    - name: Add rbd module to /etc/modules-load.d/custom.conf if not present
+      lineinfile:
+        path: /etc/modules-load.d/custom.conf
+        line: 'rbd'
+        state: present
+        owner: root
+        group: root
+        mode: '0644'

@@ -1,0 +1,101 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+imageRepository: registry.k8s.io
+certificatesDir: /etc/kubernetes/pki
+clusterName: {{ k8s_cluster_name }}
+controlPlaneEndpoint: {{ control_plane_endpoint }}
+apiServer:
+  certSANs:
+{% for san in k8s_api_cert_sans %}
+    - "{{ san }}"
+{% endfor %}
+  extraArgs:
+    - name: feature-gates
+      value: WatchList=true,MutatingAdmissionPolicy=true
+    - name: runtime-config
+      value: admissionregistration.k8s.io/v1beta1=true
+    - name: max-requests-inflight
+      value: "2000"
+    - name: max-mutating-requests-inflight
+      value: "1000"
+    - name: default-watch-cache-size
+      value: "1000"
+    - name: watch-cache
+      value: "true"
+    - name: enable-admission-plugins
+      value: NodeRestriction,ResourceQuota,NamespaceLifecycle,LimitRanger,MutatingAdmissionPolicy
+    - name: profiling
+      value: "false"
+    - name: request-timeout
+      value: "1m"
+    - name: max-connection-bytes-per-sec
+      value: "10485760"
+    - name: enable-priority-and-fairness
+      value: "true"
+    - name: authorization-mode
+      value: Node,RBAC
+    - name: http2-max-streams-per-connection
+      value: "1000"
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+    extraArgs:
+      - name: listen-metrics-urls
+        value: http://0.0.0.0:2381
+      - name: quota-backend-bytes
+        value: "4294967296"
+      - name: snapshot-count
+        value: "30000"
+      - name: auto-compaction-mode
+        value: periodic
+      - name: auto-compaction-retention
+        value: 1h        
+controllerManager:
+  extraArgs:
+    - name: feature-gates
+      value: WatchList=true
+    - name: bind-address
+      value: "0.0.0.0"
+    - name: concurrent-gc-syncs
+      value: "100"
+    - name: concurrent-deployment-syncs
+      value: "50"
+    - name: concurrent-endpoint-syncs
+      value: "50"
+    - name: concurrent-replicaset-syncs
+      value: "50"      
+scheduler:
+  extraArgs:
+    - name: feature-gates
+      value: WatchList=true
+    - name: bind-address
+      value: "0.0.0.0"
+    - name: leader-elect
+      value: "true"      
+networking:
+  dnsDomain: "{{ k8s_dns_domain }}"
+  podSubnet: {{ pod_subnet }}
+  serviceSubnet: {{ service_subnet }}
+  #disableDefaultCNI: true  
+---
+kind: KubeletConfiguration
+apiVersion: kubelet.config.k8s.io/v1beta1
+cgroupDriver: systemd
+serializeImagePulls: false
+nodeStatusMaxImages: -1
+kubeAPIQPS: 500
+kubeAPIBurst: 500
+eventRecordQPS: 200
+eventBurst: 500
+registryPullQPS: 50
+registryBurst: 100
+kubeletCgroups: "/systemd/system.slice"
+---
+apiVersion: kubeproxy.config.k8s.io/v1alpha1
+kind: KubeProxyConfiguration
+metricsBindAddress: "0.0.0.0:10249"
+mode: "ipvs"
+ipvs:
+  strictARP: true
+iptables:
+  masqueradeAll: false

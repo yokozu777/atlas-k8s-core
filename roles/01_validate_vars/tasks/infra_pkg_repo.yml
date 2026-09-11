@@ -1,0 +1,19 @@
+---
+# Package-repo client knobs (Phase 4). No use_internal_rpm_apt_repo.
+# URI bake: pkg_repo_base (Nexus) → else pkg_repo_nginx_ingress_domain → else public.
+
+- name: Assert pkg_repo_base is absolute when set
+  ansible.builtin.assert:
+    that:
+      - pkg_repo_base is match('^https?://')
+    fail_msg: pkg_repo_base must be an absolute http(s) URL when set
+  when: pkg_repo_base | default('') | length > 0
+
+- name: Assert nginx package-repo domain when mirror baking is intended via domain only
+  ansible.builtin.debug:
+    msg: >-
+      Using pkg_repo_nginx_ingress_domain={{ pkg_repo_nginx_ingress_domain }}
+      for package URI baking (pkg_repo_base is empty).
+  when:
+    - pkg_repo_base | default('') | length == 0
+    - pkg_repo_nginx_ingress_domain | default('') | length > 0

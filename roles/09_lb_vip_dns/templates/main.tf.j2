@@ -1,0 +1,26 @@
+terraform {
+  required_providers {
+    dns = {
+      source  = "hashicorp/dns"
+      version = "{{ k8s_lb_dns_tf_provider_version }}"
+    }
+  }
+}
+
+provider "dns" {
+  update {
+    server        = "{{ k8s_lb_dns_server }}"
+    key_name      = "{{ k8s_lb_dns_key_name }}"
+    key_algorithm = "{{ k8s_lb_dns_key_algorithm }}"
+    key_secret    = "{{ k8s_lb_dns_key_secret }}"
+    transport     = "{{ k8s_lb_dns_transport }}"
+  }
+}
+
+# Apex A for Keepalived VIP (controlPlaneEndpoint hostname).
+resource "dns_a_record_set" "lb_vip" {
+  zone      = "{{ k8s_lb_dns_zone }}"
+  name      = "{{ k8s_lb_hostname }}"
+  addresses = ["{{ vip_address }}"]
+  ttl       = {{ k8s_lb_dns_a_ttl | int }}
+}

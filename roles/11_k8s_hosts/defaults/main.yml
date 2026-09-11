@@ -1,0 +1,23 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-core.yml (versions / registry modes).
+# Package lists live in vars/main.yaml (templated from k8s_version_*).
+
+# Inventory group targeting
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# Used when use_internal_docker_registry != none, and for cleanup when mode is none.
+# Last entry marks the internal registry host as direct (no mirror).
+containerd_registry_mirrors:
+  - { dir_name: docker.io, server: "https://registry-1.docker.io", mirror_path: docker-hub }
+  - { dir_name: registry-1.docker.io, server: "https://registry-1.docker.io", mirror_path: docker-hub }
+  - { dir_name: registry.k8s.io, server: "https://registry.k8s.io", mirror_path: k8s.io }
+  - { dir_name: gcr.io, server: "https://gcr.io", mirror_path: gcr.io }
+  - { dir_name: mirror.gcr.io, server: "https://mirror.gcr.io", mirror_path: mirror.gcr.io }
+  - { dir_name: ghcr.io, server: "https://ghcr.io", mirror_path: ghcr.io }
+  - { dir_name: quay.io, server: "https://quay.io", mirror_path: quay.io }
+  # Docker Hub vanity: share docker.io pull-through (hosts.toml slug from mirror_path).
+  - { dir_name: cr.fluentbit.io, server: "https://registry-1.docker.io", mirror_path: docker.io }
+  # GHCR vanity: share ghcr.io pull-through (hosts.toml slug from mirror_path).
+  - { dir_name: reg.kyverno.io, server: "https://ghcr.io", mirror_path: ghcr.io }
+  - { dir_name: "{{ nexus_host | default('nexus.example.com') }}", server: "https://{{ nexus_host | default('nexus.example.com') }}", direct: true }

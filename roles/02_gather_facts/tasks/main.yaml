@@ -1,0 +1,17 @@
+    - name: Gather distribution facts
+      ansible.builtin.setup:
+        gather_subset:
+          - '!all'
+          - distribution
+
+    - name: Gather service facts on k8s nodes
+      ansible.builtin.service_facts:
+      when: inventory_hostname in (groups.get(k8s_master_hosts, []) + groups.get(k8s_worker_hosts, []))
+
+    - name: Persist service facts in fact cache
+      ansible.builtin.set_fact:
+        services: "{{ ansible_facts.services }}"
+        cacheable: true
+      when:
+        - inventory_hostname in (groups.get(k8s_master_hosts, []) + groups.get(k8s_worker_hosts, []))
+        - ansible_facts.services is defined

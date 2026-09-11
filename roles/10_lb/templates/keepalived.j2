@@ -1,0 +1,52 @@
+# Global definitions configuration block
+global_defs {
+
+    router_id {{ keepalived_router_id }}
+
+}
+
+vrrp_instance {{ keepalived_vrrp_instance }} {
+
+    # The state MASTER designates the active server, the state BACKUP designates the backup server.
+  {% if inventory_hostname == groups[k8s_lb_hosts][0] %}
+  state MASTER
+  {% else %}
+  state BACKUP
+  {% endif %}
+
+    virtual_router_id {{ keepalived_virtual_router_id }}
+
+    # The interface parameter assigns the physical interface name 
+    # to this particular virtual IP instance.
+    interface {{ keepalived_interface_effective }}
+
+    # The priority specifies the order in which the assigned interface
+    # takes over in a failover; the higher the number, the higher the priority.
+    # This priority value must be within the range of 0 to 255, and the Load Balancing 
+    # server configured as state MASTER should have a priority value set to a higher number 
+    # than the priority value of the server configured as state BACKUP.
+
+  {% if inventory_hostname == groups[k8s_lb_hosts][0] %}
+  priority {{ keepalived_master_priority }}
+  {% else %}
+  priority {{ keepalived_master_priority - groups[k8s_lb_hosts].index(inventory_hostname) }}
+  {% endif %}
+
+    advert_int {{ keepalived_advert_int }}
+
+    authentication {
+
+        auth_type PASS
+
+        # Don't forget to change auth_pass to something more secure.
+        # auth_pass value MUST be same in both nodes.
+        auth_pass "{{ vip_auth_pass }}"
+
+    }
+
+    virtual_ipaddress {
+
+        "{{ vip_address }}"
+
+    }
+}

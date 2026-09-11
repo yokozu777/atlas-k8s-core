@@ -1,0 +1,102 @@
+---
+- name: Check admin kubeconfig for join token generation
+  ansible.builtin.stat:
+    path: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  register: k8s_admin_conf_for_join
+  delegate_to: "{{ kubeadm_join_run_host }}"
+  connection: ssh
+  become: true
+
+- name: Generate kubeadm worker join command only
+  ansible.builtin.shell: kubeadm token create --print-join-command
+  environment:
+    KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  register: k8s_worker_join_cmd_raw
+  changed_when: true
+  no_log: true
+  delegate_to: "{{ kubeadm_join_run_host }}"
+  connection: ssh
+  become: true
+  when:
+    - k8s_admin_conf_for_join.stat.exists | default(false) | bool
+    - not (kubeadm_join_generate_control_plane_cmd | default(true) | bool)
+
+- name: Generate kubeadm worker join command and certificate key atomically
+  ansible.builtin.shell: |
+    set -euo pipefail
+    WORKER_JOIN=$(kubeadm token create --print-join-command)
+    UPLOAD_OUTPUT=$(kubeadm init phase upload-certs --upload-certs 2>&1)
+    CERT_KEY=$(printf '%s\n' "$UPLOAD_OUTPUT" | grep -Eo '[a-f0-9]{64}' | tail -1)
+    if [ -z "$CERT_KEY" ]; then
+      echo "failed to extract certificate key from upload-certs output:" >&2
+      printf '%s\n' "$UPLOAD_OUTPUT" >&2
+      exit 1
+    fi
+    printf '%s\n' "$WORKER_JOIN"
+    printf '%s\n' "$CERT_KEY"
+  args:
+    executable: /bin/bash
+  environment:
+    KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  register: k8s_cp_join_cmds_raw
+  changed_when: true
+  no_log: true
+  delegate_to: "{{ kubeadm_join_run_host }}"
+  connection: ssh
+  become: true
+  when:
+    - k8s_admin_conf_for_join.stat.exists | default(false) | bool
+    - kubeadm_join_generate_control_plane_cmd | default(true) | bool
+
+- name: Publish worker join command fact
+  ansible.builtin.set_fact:
+    k8s_join_worker_cmd: >-
+      {{
+        (k8s_cp_join_cmds_raw.stdout_lines[0] if (kubeadm_join_generate_control_plane_cmd | default(true) | bool)
+         else k8s_worker_join_cmd_raw.stdout) | trim
+      }}
+  delegate_to: "{{ kubeadm_join_fact_host }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  when:
+    - k8s_admin_conf_for_join.stat.exists | default(false) | bool
+    - (
+        (kubeadm_join_generate_control_plane_cmd | default(true) | bool
+         and k8s_cp_join_cmds_raw is defined
+         and k8s_cp_join_cmds_raw.stdout_lines | default([]) | length >= 1)
+        or (not (kubeadm_join_generate_control_plane_cmd | default(true) | bool)
+            and k8s_worker_join_cmd_raw is defined
+            and k8s_worker_join_cmd_raw.stdout | default('') | trim | length > 0)
+      )
+
+- name: Publish control-plane join command fact
+  ansible.builtin.set_fact:
+    k8s_join_control_plane_cmd: >-
+      {{ k8s_cp_join_cmds_raw.stdout_lines[0] | trim }}
+      --control-plane --certificate-key {{ k8s_cp_join_cmds_raw.stdout_lines[-1] | trim }}
+      --ignore-preflight-errors all
+  delegate_to: "{{ kubeadm_join_fact_host }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  when:
+    - kubeadm_join_generate_control_plane_cmd | default(true) | bool
+    - k8s_cp_join_cmds_raw is defined
+    - k8s_cp_join_cmds_raw.stdout_lines | default([]) | length >= 2
+    - k8s_cp_join_cmds_raw.stdout_lines[-1] | trim is match('^[a-f0-9]{64}$')
+
+- name: Fail when control-plane certificate key was not extracted
+  ansible.builtin.fail:
+    msg: >-
+      kubeadm init phase upload-certs did not return a valid 64-character certificate key
+      on {{ kubeadm_join_run_host }}. Re-run join after checking admin kubeconfig.
+  when:
+    - kubeadm_join_generate_control_plane_cmd | default(true) | bool
+    - k8s_admin_conf_for_join.stat.exists | default(false) | bool
+    - k8s_cp_join_cmds_raw is defined
+    - k8s_cp_join_cmds_raw.rc | default(1) == 0
+    - not (
+        k8s_cp_join_cmds_raw.stdout_lines | default([]) | length >= 2
+        and k8s_cp_join_cmds_raw.stdout_lines[-1] | trim is match('^[a-f0-9]{64}$')
+      )

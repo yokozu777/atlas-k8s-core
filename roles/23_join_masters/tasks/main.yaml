@@ -1,0 +1,92 @@
+---
+- name: Reset control-plane node before join
+  ansible.builtin.command: kubeadm reset -f
+  when: k8s_needs_join | default(false) | bool
+  changed_when: true
+
+- name: Generate fresh control-plane join command immediately before join
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/kubeadm_generate_join_commands.yaml"
+  vars:
+    kubeadm_join_run_host: "{{ groups[k8s_master_hosts][0] }}"
+    kubeadm_join_fact_host: "{{ k8s_cluster_fact_host }}"
+    kubeadm_join_generate_control_plane_cmd: true
+  when: k8s_needs_join | default(false) | bool
+
+- name: Resolve control-plane join command
+  ansible.builtin.set_fact:
+    join_k8s: "{{ hostvars[k8s_cluster_fact_host].k8s_join_control_plane_cmd | trim }}"
+  when:
+    - k8s_needs_join | default(false) | bool
+    - hostvars[k8s_cluster_fact_host].k8s_join_control_plane_cmd | default('') | length > 0
+
+- name: Fail when control-plane join command is missing
+  ansible.builtin.fail:
+    msg: >-
+      Control-plane join command was not generated on {{ groups[k8s_master_hosts][0] }}.
+      Check kubeadm init phase upload-certs and admin kubeconfig on the first control-plane node.
+  when:
+    - k8s_needs_join | default(false) | bool
+    - join_k8s is not defined
+
+- name: Join additional control-plane node
+  ansible.builtin.command: "{{ join_k8s }}"
+  register: join_master_result
+  when:
+    - k8s_needs_join | default(false) | bool
+    - join_k8s is defined
+  failed_when: false
+  changed_when: join_master_result.rc == 0
+  no_log: true
+
+- name: Report control-plane join failure
+  ansible.builtin.fail:
+    msg: >-
+      kubeadm join failed on {{ inventory_hostname }} (rc={{ join_master_result.rc }}):
+      {{ join_master_result.stderr | default(join_master_result.stdout) | regex_replace('--token\\s+\\S+', '--token ***') | regex_replace('--certificate-key\\s+\\S+', '--certificate-key ***') }}
+  when:
+    - k8s_needs_join | default(false) | bool
+    - join_master_result is defined
+    - join_master_result.rc | default(0) != 0
+    - "'already a member' not in (join_master_result.stderr | default('') ~ join_master_result.stdout | default(''))"
+
+- name: Cleanup join command artifacts after successful control-plane join
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/kubeadm_cleanup_join_commands.yaml"
+  vars:
+    kubeadm_join_run_host: "{{ groups[k8s_master_hosts][0] }}"
+    kubeadm_join_fact_host: "{{ k8s_cluster_fact_host }}"
+    kubeadm_join_cleanup_facts: true
+  when:
+    - k8s_needs_join | default(false) | bool
+    - join_master_result is defined
+    - join_master_result.changed | default(false) | bool
+
+- name: Wait for joined control-plane node to register in API
+  ansible.builtin.command: kubectl get node {{ k8s_node_name }} --no-headers
+  environment:
+    KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  delegate_to: "{{ groups[k8s_master_hosts][0] }}"
+  become: true
+  register: join_master_ready
+  until: join_master_ready.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  when: >-
+    (join_master_result is defined and join_master_result.changed | default(false))
+    or (
+      not (k8s_needs_join | default(false) | bool)
+      and (k8s_kubelet_bootstrapped | default(false) | bool)
+    )
+
+- name: Label control-plane node loadtype
+  ansible.builtin.command: kubectl label node {{ k8s_node_name }} loadtype=master --overwrite
+  environment:
+    KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  delegate_to: "{{ groups[k8s_master_hosts][0] }}"
+  become: true
+  when: >-
+    (join_master_result is defined and join_master_result.changed | default(false))
+    or (
+      not (k8s_needs_join | default(false) | bool)
+      and (k8s_kubelet_bootstrapped | default(false) | bool)
+    )

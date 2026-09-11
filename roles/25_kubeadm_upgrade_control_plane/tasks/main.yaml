@@ -1,0 +1,94 @@
+    - name: Skip control-plane upgrade when version matches target
+      ansible.builtin.debug:
+        msg: Kubernetes packages already at target on control-plane node
+      when: not (k8s_needs_upgrade | default(false) | bool)
+
+    - name: Unhold Kubernetes packages on Ubuntu
+      ansible.builtin.shell: apt-mark unhold kubelet kubeadm kubectl
+      changed_when: false
+      failed_when: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Upgrade Kubernetes packages on Ubuntu
+      ansible.builtin.apt:
+        name: "{{ k8s_packages_ubuntu }}"
+        state: present
+        update_cache: true
+        install_recommends: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Hold Kubernetes packages on Ubuntu
+      ansible.builtin.shell: apt-mark hold kubelet kubeadm kubectl
+      changed_when: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    # Delete by package name (not target NEVRA): locks pin the *current*
+    # version (e.g. kubelet-1.36.2-…); deleting kubelet-{{ k8s_version_oracle }}
+    # leaves the old lock and dnf reports "filtered out by exclude filtering".
+    - name: Remove DNF version locks for Kubernetes packages
+      ansible.builtin.shell: dnf versionlock delete {{ item }} || true
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+      changed_when: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Upgrade Kubernetes packages on Oracle Linux
+      ansible.builtin.dnf:
+        name: "{{ k8s_packages_oracle }}"
+        state: present
+        install_weak_deps: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Restore DNF version locks for Kubernetes packages
+      ansible.builtin.shell: dnf versionlock add {{ item }}
+      loop:
+        - "kubelet-{{ k8s_version_oracle }}"
+        - "kubeadm-{{ k8s_version_oracle }}"
+        - "kubectl-{{ k8s_version_oracle }}"
+      changed_when: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Plan Kubernetes control-plane upgrade on first master
+      ansible.builtin.command: kubeadm upgrade plan
+      register: k8s_upgrade_plan
+      changed_when: false
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - inventory_hostname == groups[k8s_master_hosts][0]
+
+    - name: Apply Kubernetes control-plane upgrade on first master
+      ansible.builtin.command: "kubeadm upgrade apply {{ k8s_upgrade_target }} -y"
+      register: k8s_upgrade_apply
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - inventory_hostname == groups[k8s_master_hosts][0]
+      changed_when: k8s_upgrade_apply.rc == 0
+
+    - name: Upgrade additional control-plane node
+      ansible.builtin.command: kubeadm upgrade node
+      register: k8s_upgrade_node
+      when:
+        - k8s_needs_upgrade | default(false) | bool
+        - inventory_hostname != groups[k8s_master_hosts][0]
+      changed_when: k8s_upgrade_node.rc == 0
+
+    - name: Restart kubelet after control-plane upgrade
+      ansible.builtin.systemd:
+        name: kubelet
+        state: restarted
+        daemon_reload: true
+      when: k8s_needs_upgrade | default(false) | bool

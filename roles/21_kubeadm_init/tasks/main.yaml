@@ -1,0 +1,84 @@
+---
+- name: Template kubeadm config
+  ansible.builtin.template:
+    src: kubeadm.yaml.j2
+    dest: /etc/kubernetes/kubeadm.yaml
+    mode: '0644'
+
+- name: Resolve Kubernetes node name
+  ansible.builtin.set_fact:
+    k8s_node_name: "{{ hostvars[inventory_hostname].hostname | default(inventory_hostname ~ '.' ~ dns_domain_suffix) }}"
+
+- name: Check for Kubernetes admin kubeconfig
+  ansible.builtin.stat:
+    path: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  register: k8s_admin_conf_pre
+
+- name: Initialize first control-plane node
+  ansible.builtin.command: >-
+    kubeadm init --config /etc/kubernetes/kubeadm.yaml --upload-certs
+    --ignore-preflight-errors all --skip-phases=addon/kube-proxy
+  args:
+    chdir: $HOME
+  register: k8s_init_result
+  when: >-
+    (k8s_needs_init | default(false) | bool)
+    or not (k8s_admin_conf_pre.stat.exists | default(false) | bool)
+  changed_when: k8s_init_result.rc == 0
+
+- name: Refresh Kubernetes admin kubeconfig stat
+  ansible.builtin.stat:
+    path: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  register: k8s_admin_conf_local
+
+- name: Ensure kubeconfig directory exists for break-glass deploy user
+  ansible.builtin.file:
+    path: "{{ k8s_admin_home }}/.kube"
+    state: directory
+    owner: "{{ k8s_admin_user }}"
+    group: "{{ k8s_admin_user }}"
+    mode: '0755'
+  when:
+    - k8s_copy_kubeconfig_to_admin_home | default(false) | bool
+    - k8s_admin_conf_local.stat.exists | default(false) | bool
+
+- name: Copy admin.conf to deploy user kubeconfig (break-glass)
+  ansible.builtin.copy:
+    src: "{{ k8s_kubeadm_admin_kubeconfig }}"
+    dest: "{{ k8s_node_kubeconfig }}"
+    remote_src: true
+    owner: "{{ k8s_admin_user }}"
+    group: "{{ k8s_admin_user }}"
+    mode: '0600'
+  when:
+    - k8s_copy_kubeconfig_to_admin_home | default(false) | bool
+    - k8s_admin_conf_local.stat.exists | default(false) | bool
+
+- name: Generate join commands after fresh init
+  ansible.builtin.include_tasks: "{{ role_path }}/../common/tasks/kubeadm_generate_join_commands.yaml"
+  vars:
+    kubeadm_join_run_host: "{{ inventory_hostname }}"
+    kubeadm_join_fact_host: "{{ k8s_cluster_fact_host }}"
+    kubeadm_join_generate_control_plane_cmd: true
+  when:
+    - k8s_init_result is defined
+    - k8s_init_result.changed | default(false)
+
+- name: Wait for first control-plane node to register in API
+  ansible.builtin.command: kubectl get node {{ k8s_node_name }} --no-headers
+  environment:
+    KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  become: true
+  register: init_master_ready
+  until: init_master_ready.rc == 0
+  retries: 30
+  delay: 5
+  changed_when: false
+  when: k8s_admin_conf_local.stat.exists | default(false)
+
+- name: Label first control-plane node loadtype
+  ansible.builtin.command: kubectl label node {{ k8s_node_name }} loadtype=master --overwrite
+  environment:
+    KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  become: true
+  when: k8s_admin_conf_local.stat.exists | default(false)

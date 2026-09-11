@@ -1,0 +1,81 @@
+---
+- name: Stat Ansible controller kubeconfig for API probe
+  ansible.builtin.stat:
+    path: "{{ controller_kubeconfig }}"
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false
+  run_once: true
+  register: k8s_cluster_state_controller_kc
+
+- name: Stat admin.conf on first control-plane node
+  ansible.builtin.stat:
+    path: "{{ k8s_kubeadm_admin_kubeconfig }}"
+  register: k8s_admin_conf_probe
+  delegate_to: "{{ groups[k8s_master_hosts][0] }}"
+  become: true
+  run_once: true
+
+- name: Resolve cluster API probe target
+  ansible.builtin.set_fact:
+    k8s_cluster_api_probe_host: >-
+      {{
+        k8s_cluster_fact_host
+        if (k8s_cluster_state_controller_kc.stat.exists | default(false) | bool)
+        else groups[k8s_master_hosts][0]
+      }}
+    k8s_cluster_api_probe_kubeconfig: >-
+      {{
+        controller_kubeconfig
+        if (k8s_cluster_state_controller_kc.stat.exists | default(false) | bool)
+        else k8s_kubeadm_admin_kubeconfig
+      }}
+    k8s_cluster_api_probe_local: >-
+      {{ k8s_cluster_state_controller_kc.stat.exists | default(false) | bool }}
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  run_once: true
+
+- name: List cluster node names from API
+  ansible.builtin.command: kubectl get nodes -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}'
+  environment:
+    KUBECONFIG: "{{ hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_kubeconfig }}"
+  register: k8s_nodes_names_cmd
+  delegate_to: "{{ hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_host }}"
+  connection: "{{ 'local' if hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_local | default(false) | bool else 'ssh' }}"
+  become: "{{ not (hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_local | default(false) | bool) }}"
+  run_once: true
+  changed_when: false
+  failed_when: false
+  when: k8s_admin_conf_probe.stat.exists | default(false) | bool
+
+- name: List Ready cluster nodes from API
+  ansible.builtin.shell: kubectl get nodes --no-headers | awk '$2=="Ready" {print $1}'
+  environment:
+    KUBECONFIG: "{{ hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_kubeconfig }}"
+  register: k8s_ready_nodes_cmd
+  delegate_to: "{{ hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_host }}"
+  connection: "{{ 'local' if hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_local | default(false) | bool else 'ssh' }}"
+  become: "{{ not (hostvars[k8s_cluster_fact_host].k8s_cluster_api_probe_local | default(false) | bool) }}"
+  run_once: true
+  changed_when: false
+  failed_when: false
+  when: k8s_admin_conf_probe.stat.exists | default(false) | bool
+
+- name: Build cluster API index
+  ansible.builtin.set_fact:
+    k8s_api_node_names: "{{ k8s_nodes_names_cmd.stdout_lines | default([]) | select('ne', '') | list }}"
+    k8s_api_ready_node_names: "{{ k8s_ready_nodes_cmd.stdout_lines | default([]) | select('ne', '') | list }}"
+    k8s_cluster_exists: >-
+      {{
+        (k8s_admin_conf_probe.stat.exists | default(false) | bool)
+        and (k8s_nodes_names_cmd.rc | default(1)) == 0
+        and (k8s_nodes_names_cmd.stdout_lines | default([]) | length > 0)
+      }}
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  run_once: true

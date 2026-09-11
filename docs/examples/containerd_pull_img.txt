@@ -1,0 +1,10 @@
+cat /etc/containerd/config.toml
+sudo systemctl restart containerd
+
+$ sudo crictl -r /run/containerd/containerd.sock pull <image>
+
+# or config runntime once for all
+$ sudo crictl config runtime-endpoint /run/containerd/containerd.sock
+$ sudo crictl pull <image>
+
+ctr image pull --plain-http <image>

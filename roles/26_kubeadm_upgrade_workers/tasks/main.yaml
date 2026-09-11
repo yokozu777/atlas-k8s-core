@@ -1,0 +1,97 @@
+    - name: Skip worker upgrade when version matches target
+      ansible.builtin.debug:
+        msg: Kubernetes packages already at target on worker node
+      when: not (k8s_needs_upgrade | default(false) | bool)
+
+    - name: Upgrade Kubernetes worker node
+      when: k8s_needs_upgrade | default(false) | bool
+      block:
+        - name: Drain worker node before upgrade
+          ansible.builtin.command: >-
+            kubectl drain {{ k8s_node_name }}
+            --ignore-daemonsets --delete-emptydir-data --force --grace-period=60
+          environment:
+            KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+          delegate_to: "{{ groups[k8s_master_hosts][0] }}"
+          become: true
+          register: k8s_drain_worker
+          changed_when: k8s_drain_worker.rc == 0
+
+        - name: Remember worker was drained
+          ansible.builtin.set_fact:
+            k8s_worker_was_drained: true
+          when: k8s_drain_worker.rc == 0
+
+        - name: Unhold Kubernetes packages on Ubuntu
+          ansible.builtin.shell: apt-mark unhold kubelet kubeadm kubectl
+          changed_when: false
+          failed_when: false
+          when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+        - name: Upgrade Kubernetes packages on Ubuntu
+          ansible.builtin.apt:
+            name: "{{ k8s_packages_ubuntu }}"
+            state: present
+            update_cache: true
+            install_recommends: false
+          when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+        - name: Hold Kubernetes packages on Ubuntu
+          ansible.builtin.shell: apt-mark hold kubelet kubeadm kubectl
+          changed_when: false
+          when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+        # Delete by package name (not target NEVRA): locks pin the *current*
+        # version; deleting kubelet-{{ k8s_version_oracle }} leaves the old lock.
+        - name: Remove DNF version locks for Kubernetes packages
+          ansible.builtin.shell: dnf versionlock delete {{ item }} || true
+          loop:
+            - kubelet
+            - kubeadm
+            - kubectl
+          changed_when: false
+          when: ansible_facts['distribution'] == 'OracleLinux'
+
+        - name: Upgrade Kubernetes packages on Oracle Linux
+          ansible.builtin.dnf:
+            name: "{{ k8s_packages_oracle }}"
+            state: present
+            install_weak_deps: false
+          when: ansible_facts['distribution'] == 'OracleLinux'
+
+        - name: Restore DNF version locks for Kubernetes packages
+          ansible.builtin.shell: dnf versionlock add {{ item }}
+          loop:
+            - "kubelet-{{ k8s_version_oracle }}"
+            - "kubeadm-{{ k8s_version_oracle }}"
+            - "kubectl-{{ k8s_version_oracle }}"
+          changed_when: false
+          when: ansible_facts['distribution'] == 'OracleLinux'
+
+        - name: Upgrade worker node kubeadm configuration
+          ansible.builtin.command: kubeadm upgrade node
+          register: k8s_worker_upgrade_node
+          changed_when: k8s_worker_upgrade_node.rc == 0
+
+        - name: Restart kubelet after worker upgrade
+          ansible.builtin.systemd:
+            name: kubelet
+            state: restarted
+            daemon_reload: true
+
+      rescue:
+        - name: Fail after worker upgrade error
+          ansible.builtin.fail:
+            msg: "Worker upgrade failed on {{ k8s_node_name }}"
+
+      always:
+        - name: Uncordon worker node after upgrade attempt
+          ansible.builtin.command: kubectl uncordon {{ k8s_node_name }}
+          environment:
+            KUBECONFIG: "{{ k8s_kubeadm_admin_kubeconfig }}"
+          delegate_to: "{{ groups[k8s_master_hosts][0] }}"
+          become: true
+          when: k8s_worker_was_drained | default(false) | bool
+          register: k8s_uncordon_worker
+          changed_when: k8s_uncordon_worker.rc == 0
+          failed_when: false

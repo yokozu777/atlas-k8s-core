@@ -1,0 +1,10 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-core.yml (ntp_servers).
+ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+
+sync_time_max_offset_seconds: 1.0
+sync_time_settle_seconds: 10
+sync_time_hard_step_threshold_seconds: 60
+sync_time_probe_timeout_seconds: 30

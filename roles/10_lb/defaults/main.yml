@@ -1,0 +1,35 @@
+---
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-core.yml).
+k8s_lb_hosts: k8s_lbs
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# Packages
+lb_packages_debian:
+  - libnginx-mod-stream
+  - keepalived
+lb_packages_oracle:
+  - keepalived
+  - nginx-mod-stream
+  - policycoreutils-python-utils
+
+lb_firewalld_zone: public
+lb_firewalld_ports:
+  - 22/tcp
+  - "{{ k8s_api_port | default(6443) }}/tcp"
+lb_services:
+  - nginx.service
+  - keepalived.service
+
+# VRRP NIC: "" = auto ansible_default_ipv4.interface (mixed-OS: ens18 vs eth0).
+# Non-empty override used only when that name exists on the host.
+keepalived_interface: ""
+
+# Nginx stream (API VIP front)
+nginx_stream_module_path: /usr/lib/nginx/modules/ngx_stream_module.so
+nginx_worker_connections: 2048
+nginx_stream_lb_method: random two least_conn
+nginx_proxy_timeout: 300s
+nginx_proxy_connect_timeout: 60s
+nginx_upstream_max_fails: 3
+nginx_upstream_fail_timeout: 30s

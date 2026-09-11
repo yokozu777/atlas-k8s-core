@@ -1,0 +1,11 @@
+# Application sidecar injection only.
+# Mesh-wide Telemetry/mesh-default (provider otel-tracing, sampling
+# istio_tracing_sampling_percentage) is applied by atlas-k8s-addons 50_istio.
+# Do not kubectl-apply a second Telemetry in istio-system.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: robot-shop
+  labels:
+    istio-injection: enabled

@@ -1,0 +1,17 @@
+---
+# Operator catalog: group_vars/all/atlas-k8s-core.yml (versions / VIP). Deep knobs below.
+
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-core.yml).
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# kubeadm API server certificate SANs (VIP + LB DNS name)
+k8s_api_cert_sans:
+  - "{{ vip_address }}"
+  - "{{ k8s_lb_hostname }}.{{ dns_domain_suffix }}"
+
+# Break-glass kubeconfig on the first master (optional)
+k8s_admin_home: "/home/{{ k8s_admin_user | default('localuser') }}"
+k8s_node_kubeconfig: "{{ k8s_admin_home }}/.kube/config"
+k8s_copy_kubeconfig_to_admin_home: false
+k8s_kubeadm_admin_kubeconfig: /etc/kubernetes/admin.conf

@@ -1,0 +1,365 @@
+# # Qick fix for orcle10
+#     - name: install kernel-uek-modules-extra
+#       shell: dnf install kernel-uek-modules-extra-netfilter-$(uname -r) -y    
+#       when: ansible_facts['distribution'] == 'OracleLinux' and ansible_facts['distribution_version'] is version('10', '>=') 
+
+# Qick fix for orcle
+    - name: install kernel-uek-modules-extra
+      shell: dnf install kernel-uek-modules-extra-netfilter-$(uname -r) -y    
+      when: ansible_facts['distribution'] == 'OracleLinux'
+
+###
+
+    - name: Stat foundation Docker CE drop-in
+      ansible.builtin.stat:
+        path: >-
+          {{
+            '/etc/apt/sources.list.d/ubuntu-containerd.sources'
+            if ansible_facts['distribution'] == 'Ubuntu'
+            else '/etc/apt/sources.list.d/debian-containerd.sources'
+          }}
+      register: k8s_foundation_docker_sources
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Stat foundation Kubernetes APT drop-in
+      ansible.builtin.stat:
+        path: "/etc/apt/sources.list.d/k8s-ubuntu-{{ k8s_apt_repo_version }}.sources"
+      register: k8s_foundation_apt_sources
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - block:
+        - name: Download the Kubernetes APT key
+          command: curl -fsSL -o /etc/apt/keyrings/kubernetes-apt-keyring https://pkgs.k8s.io/core:/stable:/v{{ k8s_apt_repo_version }}/deb/Release.key
+          args:
+            creates: /etc/apt/keyrings/kubernetes-apt-keyring
+          when: not (k8s_foundation_apt_sources.stat.exists | default(false))
+
+        - name: Convert Kubernetes APT key to GPG format
+          command: gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /etc/apt/keyrings/kubernetes-apt-keyring
+          args:
+            creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+          when: not (k8s_foundation_apt_sources.stat.exists | default(false))
+
+        - name: Download and install the Docker GPG key (Ubuntu)
+          command: curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+          args:
+            creates: /etc/apt/keyrings/docker.asc
+          when:
+            - ansible_facts['distribution'] == 'Ubuntu'
+            - not (k8s_foundation_docker_sources.stat.exists | default(false))
+
+        - name: Download and install the Docker GPG key (Debian)
+          command: curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc
+          args:
+            creates: /etc/apt/keyrings/docker.asc
+          when:
+            - ansible_facts['distribution'] == 'Debian'
+            - not (k8s_foundation_docker_sources.stat.exists | default(false))
+
+        - name: Add Kubernetes repository
+          ansible.builtin.deb822_repository:
+            name: "k8s-ubuntu-{{ k8s_apt_repo_version }}"
+            types: deb
+            uris: "{{ ('k8s-ubuntu-' ~ k8s_apt_repo_version) | pkg_repo_uri(pkg_repo_base | default(''), pkg_repo_nginx_ingress_domain | default(''), pkg_repo_upstreams | default([])) }}"
+            suites: "/"
+            signed_by: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+            state: present
+            enabled: true
+            install_python_debian: true
+          when:
+            - ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+            - not (k8s_foundation_apt_sources.stat.exists | default(false))
+
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Add Docker repository Ubuntu
+      ansible.builtin.deb822_repository:
+        name: ubuntu-containerd
+        types: deb
+        uris: "{{ 'ubuntu-containerd' | pkg_repo_uri(pkg_repo_base | default(''), pkg_repo_nginx_ingress_domain | default(''), pkg_repo_upstreams | default([])) }}"
+        suites: "{{ ansible_facts['distribution_release'] }}"
+        components: stable
+        signed_by: /etc/apt/keyrings/docker.asc
+        state: present
+        enabled: true
+        install_python_debian: true
+      when:
+        - ansible_facts['distribution'] == 'Ubuntu'
+        - not (k8s_foundation_docker_sources.stat.exists | default(false))
+
+    - name: Add Docker repository Debian
+      ansible.builtin.deb822_repository:
+        name: debian-containerd
+        types: deb
+        uris: "{{ 'debian-containerd' | pkg_repo_uri(pkg_repo_base | default(''), pkg_repo_nginx_ingress_domain | default(''), pkg_repo_upstreams | default([])) }}"
+        suites: "{{ ansible_facts['distribution_release'] }}"
+        components: stable
+        signed_by: /etc/apt/keyrings/docker.asc
+        state: present
+        enabled: true
+        install_python_debian: true
+      when:
+        - ansible_facts['distribution'] == 'Debian'
+        - not (k8s_foundation_docker_sources.stat.exists | default(false))
+
+    - block:
+        - name: Install k8s software on Ubuntu
+          apt:
+            name: "{{ k8s_packages_ubuntu }}"
+            state: present
+            update_cache: yes
+            update_cache_retries: 10
+            update_cache_retry_max_delay: 30
+            install_recommends: no
+
+        - name: APT lock kube packages on Ubuntu
+          shell: apt-mark hold "{{ item }}"
+          with_items:
+            - kubelet={{ k8s_version_ubuntu }}
+            - kubeadm={{ k8s_version_ubuntu }}
+            - kubectl={{ k8s_version_ubuntu }}
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - block:
+        - name: Install k8s software on Oracle Linux
+          dnf:
+            name: "{{ k8s_packages_oracle }}"
+            state: present
+            install_weak_deps: no
+
+        - name: DNF lock kube packages on Oracle Linux
+          shell: dnf versionlock "{{ item }}"
+          with_items:
+            - kubelet-{{ k8s_version_oracle }}
+            - kubeadm-{{ k8s_version_oracle }}
+            - kubectl-{{ k8s_version_oracle }}
+
+        - name: Stop and disable firewalld
+          service:
+            name: firewalld
+            state: stopped
+            enabled: False
+      when: ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Remove file (delete file)
+      ansible.builtin.file:
+        path: /etc/containerd/config.toml
+        state: absent
+
+    - name: create directory for containerd
+      file:
+        path: /etc/systemd/system/containerd.service.d
+        state: directory
+        mode: 0755
+
+    - name: Configure crictl for containerd
+      ansible.builtin.copy:
+        dest: /etc/crictl.yaml
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+        mode: '0644'
+
+    - name: Ensure containerd certs.d directories exist
+      ansible.builtin.file:
+        path: "/etc/containerd/certs.d/{{ item.dir_name }}/"
+        state: directory
+        mode: "0755"
+      loop: "{{ containerd_registry_mirrors }}"
+      when: >-
+        item.direct | default(false)
+        or (use_internal_docker_registry | default('none')) != 'none'
+
+    - name: Template containerd registry mirror config
+      ansible.builtin.template:
+        src: containerd/hosts.toml.j2
+        dest: "/etc/containerd/certs.d/{{ item.dir_name }}/hosts.toml"
+        mode: "0644"
+      loop: "{{ containerd_registry_mirrors }}"
+      when: >-
+        item.direct | default(false)
+        or (use_internal_docker_registry | default('none')) != 'none'
+      notify: Restart services
+
+    - name: Remove containerd mirror config when using direct public pulls
+      ansible.builtin.file:
+        path: "/etc/containerd/certs.d/{{ item.dir_name }}/hosts.toml"
+        state: absent
+      loop: "{{ containerd_registry_mirrors }}"
+      when:
+        - (use_internal_docker_registry | default('none')) == 'none'
+        - not (item.direct | default(false))
+      notify: Restart services
+
+    - name: Copy files for containerd Oracle
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - { src: 'containerd_config.toml', dest: '/etc/containerd/config.toml' }
+      notify: Restart services
+      when: ansible_facts['distribution'] == 'OracleLinux'
+
+    - name: Copy files for containerd Debian/Ubuntu
+      copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+      with_items:
+        - { src: 'containerd_config.toml', dest: '/etc/containerd/config.toml' }
+      notify: Restart services
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: Ensure /etc/NetworkManager/conf.d directory exists
+      file:
+        path: /etc/NetworkManager/conf.d
+        state: directory
+        mode: '0755'
+      when: ansible_facts.get('services', {}).get('NetworkManager.service', {}).get('state') in ['running', 'inactive']
+
+    - name: Add unmanaged devices to NetworkManager configuration
+      copy:
+        dest: /etc/NetworkManager/conf.d/unmanaged-devices.conf
+        content: |
+          [keyfile]
+          unmanaged-devices=interface-name:cali*;interface-name:tunl*;interface-name:vxlan.calico;interface-name:kube*;interface-name:bpf*
+      when:
+        - ansible_facts.get('services', {}).get('NetworkManager.service', {}).get('state') == 'running'
+      notify:
+        - Restart NetworkManager
+
+    - name: Create /etc/sysconfig/kubelet with KUBELET_EXTRA_ARGS Oracle
+      copy:
+        dest: /etc/sysconfig/kubelet
+        content: 'KUBELET_EXTRA_ARGS="--runtime-cgroups=/systemd/system.slice"'
+      when: ansible_facts['distribution'] == 'OracleLinux'        
+
+    - name: Create /etc/sysconfig/kubelet with KUBELET_EXTRA_ARGS DEB
+      copy:
+        dest: /etc/default/kubelet
+        content: 'KUBELET_EXTRA_ARGS="--runtime-cgroups=/systemd/system.slice"'
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian'] 
+
+    - name: Create LimitNOFILE.conf for containerd
+      copy:
+        dest: /etc/systemd/system/containerd.service.d/LimitNOFILE.conf
+        content: |
+          [Service]
+          LimitNOFILE=1048576
+          
+    - name: Load kernel modules
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ kernel_modules }}"
+
+    # - name: Create /etc/modules-load.d directory if it doesn't exist
+    #   file:
+    #     path: /etc/modules-load.d
+    #     state: directory
+    #     owner: root
+    #     group: root
+    #     mode: '0755'
+
+    - name: Write kernel modules to /etc/modules-load.d/custom.conf
+      copy:
+        content: "{{ kernel_modules | join('\n') }}"
+        dest: /etc/modules-load.d/custom.conf
+        owner: root
+        group: root
+        mode: '0644'
+
+    # - name: Check if containerd group exists
+    #   getent:
+    #     database: group
+    #     key: containerd
+    #   register: containerd_group
+    #   failed_when: false
+
+    - name: Create containerd group if not exists
+      group:
+        name: containerd
+        state: present
+    #   #when: containerd_group.failed
+
+    - name: Add deploy user to containerd group
+      user:
+        name: "{{ k8s_admin_user }}"
+        groups: containerd
+        append: yes
+
+    - name: Change group ownership of containerd.sock
+      file:
+        path: /var/run/containerd/containerd.sock
+        group: containerd
+        state: touch
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    # - name: Ensure /var/run/containerd directory exists
+    #   file:
+    #     path: /var/run/containerd
+    #     state: directory
+    #     owner: root
+    #     group: root
+    #     mode: '0755'
+    #   when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']        
+
+    # - name: Change group ownership of containerd.sock
+    #   file:
+    #     path: /var/run/containerd/containerd.sock
+    #     group: containerd
+    #     state: touch
+    #   when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']        
+
+    # - name: Change group ownership of containerd.sock
+    #   file:
+    #     path: /var/run/containerd/containerd.sock
+    #     group: containerd
+    #     state: touch
+    #   when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']        
+
+    - name: Reload systemd to pick up any changes to unit files
+      command: systemctl daemon-reload
+      notify:
+        - Restart services
+
+    - name: Flush handlers to restart services immediately
+      meta: flush_handlers
+
+    - name: start seriveces
+      service: name="{{ item }}" state=started enabled=yes
+      loop:
+        - containerd.service
+        - kubelet.service
+
+    - name: k8s images pull
+      command: kubeadm config images pull
+
+    # - name: Check if bpffs is already in fstab
+    #   command: grep 'bpffs /sys/fs/bpf bpf' /etc/fstab
+    #   register: fstab_entry
+    #   ignore_errors: true
+
+    # - name: Add bpffs entry to /etc/fstab if not present
+    #   block:
+    #     - name: Append bpffs entry to /etc/fstab
+    #       lineinfile:
+    #         path: /etc/fstab
+    #         line: 'bpffs /sys/fs/bpf bpf defaults 0 0'
+    #         state: present
+    #       when: fstab_entry.rc != 0
+
+    # - name: Create /sys/fs/bpf directory if it doesn't exist
+    #   file:
+    #     path: /sys/fs/bpf
+    #     state: directory
+    #     owner: root
+    #     group: root
+    #     mode: '0755'
+
+    # - name: Mount bpffs
+    #   mount:
+    #     path: /sys/fs/bpf
+    #     src: bpffs
+    #     fstype: bpf
+    #     state: mounted
+    #     opts: defaults      

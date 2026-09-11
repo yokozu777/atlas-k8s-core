@@ -1,0 +1,25 @@
+---
+- name: Assert cluster workspace layout is consistent
+  ansible.builtin.assert:
+    that:
+      - cluster_workspace_id | default('') | length > 0
+      - cluster_workspace_parent | default('') | length > 0
+      - cluster_workspace_root | default('') | length > 0
+      - cluster_workspace_id is match('^[a-zA-Z0-9.-]+$')
+      - cluster_workspace_id == k8s_cluster_domain
+      - cluster_workspace_root is match('^' ~ cluster_workspace_parent ~ '/')
+      - controller_workspace is match('^' ~ cluster_workspace_root)
+      - keycloak_tf_workspace is match('^' ~ cluster_workspace_root)
+      - k8s_lb_dns_tf_workspace is match('^' ~ cluster_workspace_root)
+      - provision_tf_workspace_dir is match('^' ~ cluster_workspace_root)
+      - provision_generated_variables_tf is match('^' ~ cluster_workspace_root)
+      - build_workdir is match('^' ~ cluster_workspace_root)
+      - build_state_file is match('^' ~ cluster_workspace_root)
+      - provision_tf_state_local_dir | default('') | length > 0
+      - provision_tf_state_cluster_path | default('') | length > 0
+      - provision_tf_state_repo_dir is match('^' ~ provision_tf_state_local_dir)
+      - not (provision_tf_state_cluster_path is match('^clusters/'))
+    fail_msg: >-
+      Cluster workspace paths must live under cluster_workspace_root;
+      durable TF state under tfstate/<cluster_id>/ (not clusters/)
+      — check group_vars/all/atlas-k8s-core.yml / cluster.yml

@@ -1,0 +1,39 @@
+graylog:
+  metrics:
+    ## If true, prometheus annotations will be attached
+    ##
+    enabled: true
+    serviceMonitor:
+      enabled: true
+      additionalLabels: {}
+      scrapeTimeout: 10s
+      interval: 10s
+  rootUsername: "admin"
+  rootPassword: "{{ k8s_secrets.graylog_root_password }}"
+  input:
+    tcp:
+      service:
+        name: graylog-tcp
+        type: ClusterIP
+      ports:
+        - name: gelf
+          port: 12221
+    udp:
+      service:
+        name: graylog-udp
+        type: ClusterIP
+      ports:
+        - name: syslog
+          port: 12221         
+  # ingress:
+  #   enabled: true
+  #   annotations:
+  #     nginx.ingress.kubernetes.io/backend-protocol: "HTTP"
+  #     nginx.ingress.kubernetes.io/ssl-passthrough: "true"    
+  #   ingressClassName: "nginx"
+  #   tls:
+  #     - secretName: ingresscert
+  #       hosts:
+  #         - graylog.{{ dns_domain_suffix }}
+  #   hosts: 
+  #     - graylog.{{ dns_domain_suffix }}

@@ -1,0 +1,3 @@
+---
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-core.yml).
+k8s_master_hosts: k8s_masters

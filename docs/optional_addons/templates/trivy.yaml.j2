@@ -1,0 +1,39 @@
+serviceMonitor:
+  enabled: true
+trivy:
+  operator:
+    config:
+      OPERATOR_TARGET_NAMESPACES: "kube-system"
+  skipDBUpdate: false
+{% if use_internal_docker_registry | default('none') == 'harbor' %}
+  dbRepository: {{ harbor_host }}/docker-hub/aquasec/trivy-db:2
+{% elif use_internal_docker_registry | default('none') == 'registry' %}
+  dbRepository: docker-io.{{ registry_ingress_domain }}/aquasec/trivy-db:2
+{% else %}
+  dbRepository: docker.io/aquasec/trivy-db:2
+{% endif %}
+  ignoreUnfixed: true
+operator:
+  replicas: 3
+  scanJobTimeout: 20m
+  scanJobsConcurrentLimit: 3
+  scanNodeCollectorLimit: 1
+  scanJobsRetryDelay: 60s
+
+nodeSelector:
+  loadtype: worker
+
+affinity:
+  nodeAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      nodeSelectorTerms:
+      - matchExpressions:
+        - key: loadtype
+          operator: In
+          values:
+          - worker
+
+nodeCollector:
+  useNodeSelector: true
+  excludeNodes:
+    node-role.kubernetes.io/control-plane=

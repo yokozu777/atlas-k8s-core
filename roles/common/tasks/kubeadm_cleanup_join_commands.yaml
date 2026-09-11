@@ -1,0 +1,32 @@
+---
+- name: Remove join command files from first control-plane node
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - "{{ k8s_admin_home }}/join_k8s_command.sh"
+    - "{{ k8s_admin_home }}/join_control_plane_command.sh"
+  delegate_to: "{{ kubeadm_join_run_host | default(groups[k8s_master_hosts][0]) }}"
+  connection: ssh
+  become: true
+
+- name: Remove legacy join command files from Ansible controller
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  delegate_to: "{{ kubeadm_join_fact_host | default(k8s_cluster_fact_host) }}"
+  connection: local
+  become: false
+  loop:
+    - /tmp/join_k8s_command.sh
+    - /tmp/join_control_plane_command.sh
+
+- name: Clear in-memory join command facts
+  ansible.builtin.set_fact:
+    k8s_join_worker_cmd: ""
+    k8s_join_control_plane_cmd: ""
+  delegate_to: "{{ kubeadm_join_fact_host | default(k8s_cluster_fact_host) }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  when: kubeadm_join_cleanup_facts | default(false) | bool

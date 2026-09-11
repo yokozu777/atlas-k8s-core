@@ -1,0 +1,12 @@
+    - name: Restart services
+      service:
+        name: "{{ item }}"
+        state: restarted
+      with_items:
+        - "containerd"
+        - "kubelet"
+
+    - name: Restart NetworkManager
+      service:
+        name: NetworkManager
+        state: restarted        

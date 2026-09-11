@@ -1,0 +1,14 @@
+---
+# Core-only validation (kubeadm, LB, hosts, workspace bootstrap).
+- name: Validate container image pull client mode
+  ansible.builtin.include_tasks: infra_docker_registry.yml
+- name: Validate package repository client mode
+  ansible.builtin.include_tasks: infra_pkg_repo.yml
+- name: Validate inventory groups for cluster bootstrap
+  ansible.builtin.include_tasks: inventory_bootstrap.yml
+- name: Validate core cluster variables
+  ansible.builtin.include_tasks: vars_cluster_core.yml
+- name: Validate controller workspace (core)
+  ansible.builtin.include_tasks: workspace_controller_core.yml
+- name: Validate cluster workspace layout (core)
+  ansible.builtin.include_tasks: workspace_layout_core.yml

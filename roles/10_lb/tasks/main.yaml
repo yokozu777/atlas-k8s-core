@@ -1,0 +1,148 @@
+# - hosts: "{{ k8s_lb_hosts }}"
+#   user: localuser
+#   become: True
+#   strategy: free  
+#   tasks: 
+
+    # - name: Check if firewalld service exists
+    #   command: systemctl list-unit-files | grep firewalld.service
+    #   register: firewalld_service
+    #   ignore_errors: yes
+
+    # - name: Set fact if firewalld service exists
+    #   set_fact:
+    #     firewalld_exists: "{{ firewalld_service.rc == 0 }}"
+
+    - name: Add nginx user
+      user:
+        name: nginx
+        shell: /sbin/nologin
+        system: yes
+        create_home: no
+
+    - name: Ensure /var/log/nginx directory exists
+      file:
+        path: /var/log/nginx
+        state: directory
+        owner: nginx
+        group: nginx
+        mode: '0755'
+
+    - name: Create error log file
+      file:
+        path: /var/log/nginx/error.log
+        state: touch
+        owner: nginx
+        group: nginx
+        mode: '0644'
+
+    - name: Ensure /run directory exists
+      file:
+        path: /run
+        state: directory
+        owner: root
+        group: root
+        mode: '0755'
+
+    - name: Create PID file
+      file:
+        path: /run/nginx.pid
+        state: touch
+        owner: nginx
+        group: nginx
+        mode: '0644'
+
+    - name: Install LBs software on Ubuntu
+      apt:
+        name: "{{ lb_packages_debian }}"
+        state: present
+        update_cache: yes
+        install_recommends: no
+      when: ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+
+    - name: install software
+      dnf:
+        name: "{{ lb_packages_oracle }}"
+        state: present
+        install_weak_deps: no
+      when: ansible_facts['distribution'] == 'OracleLinux'        
+        #sslverify: false
+        #update_cache: true
+
+    # Mixed-OS NICs (ens18 vs eth0). Explicit setup: clusterctl tag-split skips
+    # play gather_facts, and 02_gather_facts only collects distribution.
+    - name: Gather network facts for Keepalived VRRP interface
+      ansible.builtin.setup:
+        gather_subset:
+          - "!all"
+          - network
+
+    - name: Resolve Keepalived VRRP interface
+      ansible.builtin.set_fact:
+        keepalived_interface_effective: >-
+          {{
+            (
+              keepalived_interface | trim
+              if (
+                (keepalived_interface | default('') | trim | length > 0)
+                and ((keepalived_interface | trim) in (ansible_interfaces | default([])))
+              )
+              else (ansible_facts['default_ipv4']['interface'] | default(''))
+            )
+          }}
+
+    - name: Assert Keepalived VRRP interface exists
+      ansible.builtin.assert:
+        that:
+          - keepalived_interface_effective is defined
+          - keepalived_interface_effective | length > 0
+          - keepalived_interface_effective in ansible_interfaces
+        fail_msg: >-
+          Keepalived VRRP interface '{{ keepalived_interface_effective | default('') }}' not found
+          on {{ inventory_hostname }} (configured keepalived_interface='{{ keepalived_interface | default('') }}',
+          default_ipv4='{{ ansible_facts['default_ipv4']['interface'] | default('') }}',
+          interfaces={{ ansible_interfaces | default([]) }}).
+          Set keepalived_interface explicitly for multi-NIC hosts.
+
+    - name: Deploy nginx stream configuration
+      ansible.builtin.template:
+        src: nginx.j2
+        dest: /etc/nginx/nginx.conf
+      notify:
+        - Restart Nginx
+
+    - name: Deploy keepalived configuration
+      ansible.builtin.template:
+        src: keepalived.j2
+        dest: /etc/keepalived/keepalived.conf
+      notify:
+        - Restart Keepalived
+
+    - name: Add port to firewalld
+      firewalld:
+        zone: "{{ lb_firewalld_zone }}"
+        port: "{{ item }}"
+        permanent: yes
+        state: enabled
+      loop: "{{ lb_firewalld_ports }}"
+      #when: firewalld_exists
+      when: ansible_facts['distribution'] == 'OracleLinux'        
+      #when: ansible_distribution == 'OracleLinux' or ansible_distribution == 'Red Hat Enterprise Linux'        
+
+    - ansible.posix.firewalld:
+        rich_rule: rule protocol value="vrrp" accept
+        permanent: yes
+        state: enabled
+      #when: firewalld_exists        
+      when: ansible_facts['distribution'] == 'OracleLinux'        
+        
+    - name: reload service firewalld
+      systemd:
+        name: firewalld
+        state: reloaded
+      #when: firewalld_exists        
+      when: ansible_facts['distribution'] == 'OracleLinux'        
+
+    - name: start seriveces
+      service: name="{{ item }}" state=started enabled=yes
+      loop: "{{ lb_services }}"

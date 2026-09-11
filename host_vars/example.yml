@@ -1,0 +1,9 @@
+# Optional per-host overrides.
+# Copy to host_vars/<inventory_hostname>.yml (host_vars/* is gitignored except examples).
+#
+# hostname: master1.k8s.example.com
+# ansible_user: localuser
+# ansible_port: 22
+# keepalived_interface: ""             # optional; empty = auto default IPv4 NIC
+# keepalived_interface: ens18          # VRRP NIC override when LBs / NICs differ
+# keepalived_master_priority: 200      # override MASTER candidate

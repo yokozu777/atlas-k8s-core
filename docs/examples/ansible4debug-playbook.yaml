@@ -1,0 +1,7 @@
+- hosts: localhost
+  user: "{{ k8s_admin_user | default('localuser') }}"
+  strategy: linear
+  become: True
+  vars:
+  tasks:
+    - name: patch metrics server

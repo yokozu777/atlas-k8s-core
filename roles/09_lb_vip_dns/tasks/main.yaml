@@ -1,0 +1,53 @@
+---
+# Optional: create {{ k8s_lb_hostname }} → vip_address via Terraform RFC2136.
+# Gated by k8s_lb_dns_tf_manage_a_record (default false; BIND owns apex A).
+
+- name: Skip LB VIP DNS Terraform when disabled
+  ansible.builtin.meta: end_role
+  when: not (k8s_lb_dns_tf_manage_a_record | default(false) | bool)
+
+- name: Assert DNS TSIG material for LB VIP A record
+  ansible.builtin.assert:
+    that:
+      - k8s_lb_hostname | default('') | length > 0
+      - vip_address | default('') | length > 0
+      - k8s_lb_dns_server | default('') | length > 0
+      - k8s_lb_dns_zone | default('') | length > 0
+      - k8s_lb_dns_key_name | default('') | length > 0
+      - k8s_lb_dns_key_secret | default('') | length > 0
+      - k8s_lb_dns_key_secret | default('') != 'CHANGEME'
+      - k8s_lb_dns_tf_workspace | default('') | length > 0
+    fail_msg: >-
+      k8s_lb_dns_tf_manage_a_record=true requires k8s_lb_hostname, vip_address,
+      and RFC2136 TSIG (k8s_lb_dns_* or provision_dns_*). Set key secret
+      (not CHANGEME) and DNS server/zone.
+
+- name: Ensure LB VIP DNS Terraform workspace exists
+  ansible.builtin.file:
+    path: "{{ k8s_lb_dns_tf_workspace }}"
+    state: directory
+    mode: "0755"
+
+- name: Template LB VIP DNS Terraform root
+  ansible.builtin.template:
+    src: main.tf.j2
+    dest: "{{ k8s_lb_dns_tf_workspace }}/main.tf"
+    mode: "0600"
+  no_log: true
+
+- name: Initialize LB VIP DNS Terraform
+  ansible.builtin.command:
+    cmd: terraform init -input=false -no-color
+    chdir: "{{ k8s_lb_dns_tf_workspace }}"
+  register: k8s_lb_dns_tf_init
+  changed_when: >-
+    'Terraform has been successfully initialized' in (k8s_lb_dns_tf_init.stdout | default(''))
+
+- name: Apply LB VIP DNS A record
+  ansible.builtin.command:
+    cmd: terraform apply -auto-approve -input=false -no-color
+    chdir: "{{ k8s_lb_dns_tf_workspace }}"
+  register: k8s_lb_dns_tf_apply
+  changed_when: >-
+    ('Apply complete' in (k8s_lb_dns_tf_apply.stdout | default('')))
+    and ('0 added, 0 changed, 0 destroyed' not in (k8s_lb_dns_tf_apply.stdout | default('')))

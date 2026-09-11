@@ -1,0 +1,166 @@
+- name: Require NTP servers for time sync
+  ansible.builtin.assert:
+    that:
+      - ntp_servers is defined
+      - ntp_servers | length > 0
+    fail_msg: Define ntp_servers in group_vars/all/atlas-k8s-core.yml before running 03_sync_time.
+
+# Tag-scoped runs (--tags 03_sync_time) skip 02_gather_facts unless always;
+# fact cache may also be empty on first core stage.
+- name: Gather OS distribution facts
+  ansible.builtin.setup:
+    gather_subset:
+      - min
+    filter: ansible_distribution
+  when: ansible_facts.get('distribution', '') | length == 0
+
+- name: Set chrony paths and service name
+  ansible.builtin.set_fact:
+    sync_time_chrony_unit: >-
+      {{ 'chrony' if ansible_facts['distribution'] in ['Ubuntu', 'Debian'] else 'chronyd' }}
+    sync_time_chrony_conf: >-
+      {{ '/etc/chrony/chrony.conf' if ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+         else '/etc/chrony.conf' }}
+
+- name: Probe NTP offset via chronyd one-shot query
+  ansible.builtin.shell: |
+    set -o pipefail
+
+    deadline=$((SECONDS + {{ sync_time_probe_timeout_seconds }}))
+    wrong_by=""
+    probe_out=""
+
+    while [ "$SECONDS" -lt "$deadline" ]; do
+      probe_out=$(chronyd -Q "server ${NTP_HOST} iburst" 2>&1) || true
+      wrong_by=$(echo "$probe_out" | sed -n 's/.*[Ww]rong by \([-0-9.]*\) seconds.*/\1/p' | head -1)
+      if [ -n "$wrong_by" ]; then
+        break
+      fi
+      sleep 2
+    done
+
+    if [ -z "$wrong_by" ]; then
+      echo "chronyd -Q did not report clock offset from ${NTP_HOST}" >&2
+      echo "$probe_out" >&2
+      exit 1
+    fi
+
+    local_epoch=$(date +%s)
+    signed=$(awk -v w="$wrong_by" 'BEGIN { printf "%.0f", w }')
+    target_epoch=$(awk -v l="$local_epoch" -v w="$wrong_by" 'BEGIN { printf "%.0f", l + w }')
+    target_local=$(date -d "@${target_epoch}" '+%Y-%m-%d %H:%M:%S')
+    printf '%s\n%s\n' "$signed" "$target_local"
+  args:
+    executable: /bin/bash
+  environment:
+    NTP_HOST: "{{ ntp_servers[0] }}"
+  register: sync_time_initial_probe
+  changed_when: false
+
+- name: Resolve NTP hard step requirement
+  ansible.builtin.set_fact:
+    sync_time_ntp_offset_signed: "{{ sync_time_initial_probe.stdout_lines[0] | default('') | trim }}"
+    sync_time_ntp_target_local: "{{ sync_time_initial_probe.stdout_lines[1] | default('') | trim }}"
+    sync_time_hard_step_needed: >-
+      {{
+        (sync_time_initial_probe.stdout_lines[0] | default('') | trim | float | abs)
+        > (sync_time_hard_step_threshold_seconds | float)
+      }}
+
+- name: Report large clock skew before hard step
+  ansible.builtin.debug:
+    msg: >-
+      Clock skew {{ sync_time_ntp_offset_signed }}s vs NTP ({{ ntp_servers[0] }})
+      exceeds {{ sync_time_hard_step_threshold_seconds }}s;
+      applying timedatectl set-time {{ sync_time_ntp_target_local }}
+  when: sync_time_hard_step_needed | bool
+
+- name: Disable systemd timesync before hard time step
+  ansible.builtin.command: timedatectl set-ntp false
+  register: sync_time_disable_ntp
+  when: sync_time_hard_step_needed | bool
+  changed_when: sync_time_disable_ntp.rc == 0
+
+- name: Stop chrony before hard time step
+  ansible.builtin.systemd:
+    name: "{{ sync_time_chrony_unit }}"
+    state: stopped
+  when: sync_time_hard_step_needed | bool
+
+- name: Hard set system time from NTP reference
+  ansible.builtin.command: timedatectl set-time "{{ sync_time_ntp_target_local }}"
+  register: sync_time_hard_step
+  when: sync_time_hard_step_needed | bool
+  changed_when: sync_time_hard_step.rc == 0
+
+- name: Sync hardware clock after hard time step
+  ansible.builtin.command: hwclock --systohc
+  register: sync_time_hwclock
+  when: sync_time_hard_step_needed | bool
+  changed_when: sync_time_hwclock.rc == 0
+  failed_when: false
+
+- name: Start chrony after hard time step
+  ansible.builtin.systemd:
+    name: "{{ sync_time_chrony_unit }}"
+    state: started
+  when: sync_time_hard_step_needed | bool
+
+- name: Re-enable systemd timesync after hard time step
+  ansible.builtin.command: timedatectl set-ntp true
+  register: sync_time_enable_ntp
+  when: sync_time_hard_step_needed | bool
+  changed_when: sync_time_enable_ntp.rc == 0
+
+- name: Ensure chrony is active
+  ansible.builtin.systemd:
+    name: "{{ sync_time_chrony_unit }}"
+    state: started
+    enabled: true
+
+- name: Force clock step from NTP
+  ansible.builtin.shell: |
+    set -o pipefail
+    chronyc -a online
+    chronyc -a "burst 2/4 ${NTP_HOST}" 2>/dev/null || true
+    chronyc -a burst 4/4
+    chronyc -a makestep
+  args:
+    executable: /bin/bash
+  environment:
+    NTP_HOST: "{{ ntp_servers[0] }}"
+  changed_when: true
+
+- name: Wait for chrony to settle
+  ansible.builtin.command: sleep {{ sync_time_settle_seconds }}
+  changed_when: false
+
+- name: Get NTP residual offset and stratum from chrony
+  ansible.builtin.shell: |
+    set -o pipefail
+    tracking=$(chronyc tracking 2>/dev/null)
+    offset=$(echo "$tracking" | awk -F': +' '/^System time/ { print $2 }' | awk '{ print $1 }' | sed 's/[+-]//')
+    stratum=$(echo "$tracking" | awk -F': +' '/^Stratum/ { print $2 }' | awk '{ print $1 }')
+    printf '%s\n%s\n' "${offset:-}" "${stratum:-}"
+  args:
+    executable: /bin/bash
+  register: sync_time_tracking
+  changed_when: false
+
+- name: Store NTP sync status
+  ansible.builtin.set_fact:
+    sync_time_ntp_offset_seconds: "{{ sync_time_tracking.stdout_lines[0] | default('') | trim }}"
+    sync_time_chrony_stratum: "{{ sync_time_tracking.stdout_lines[1] | default('') | trim }}"
+
+- name: Assert clock is synced from NTP
+  ansible.builtin.assert:
+    that:
+      - sync_time_ntp_offset_seconds | length > 0
+      - sync_time_ntp_offset_seconds | float <= sync_time_max_offset_seconds
+      - sync_time_chrony_stratum | length > 0
+      - sync_time_chrony_stratum | int >= 1
+    fail_msg: >-
+      NTP sync failed: residual offset={{ sync_time_ntp_offset_seconds | default('unknown') }}s,
+      stratum={{ sync_time_chrony_stratum | default('unknown') }}.
+      Check {{ sync_time_chrony_conf }} (makestep 1.0 -1), ntp_servers / 12_date_timezone,
+      and infra NTP reachability ({{ ntp_servers[0] }}).

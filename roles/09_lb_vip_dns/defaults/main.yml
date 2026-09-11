@@ -1,0 +1,29 @@
+---
+# Optional Terraform RFC2136 A record for control-plane VIP:
+#   {{ k8s_lb_hostname }}.{{ dns_domain_suffix }} → vip_address
+# When false (default), leave that apex A to BIND (infra-edge role 03) or manual DNS.
+# Do not enable both TF and BIND for the same hostname.
+k8s_lb_dns_tf_manage_a_record: false
+
+# Reuse provision_dns_* when present (orchestrator leaf with compute-provision overlay).
+k8s_lb_dns_server: >-
+  {{
+    provision_dns_server
+    | default(dns_server_ip | default('', true), true)
+  }}
+k8s_lb_dns_zone: >-
+  {{
+    provision_dns_zone
+    | default((dns_domain_suffix | default('example.com')) ~ '.', true)
+  }}
+k8s_lb_dns_key_name: >-
+  {{
+    provision_dns_key_name
+    | default((dns_domain_suffix | default('example.com')) ~ '.', true)
+  }}
+k8s_lb_dns_key_algorithm: "{{ provision_dns_key_algorithm | default('hmac-sha256', true) }}"
+k8s_lb_dns_key_secret: "{{ provision_dns_key_secret | default('CHANGEME', true) }}"
+k8s_lb_dns_transport: "{{ provision_dns_transport | default('tcp4', true) }}"
+k8s_lb_dns_a_ttl: "{{ provision_dns_a_ttl | default(300, true) | int }}"
+k8s_lb_dns_tf_provider_version: "{{ provision_tf_provider_dns_version | default('3.5.0', true) }}"
+k8s_lb_dns_tf_workspace: "{{ controller_staging_dir }}/lb-vip-dns"

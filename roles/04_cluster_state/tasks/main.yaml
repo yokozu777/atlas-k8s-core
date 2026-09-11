@@ -1,0 +1,145 @@
+---
+- name: Probe cluster API state
+  ansible.builtin.import_tasks: probe_api.yaml
+
+- name: Check local kubelet bootstrap state
+  ansible.builtin.stat:
+    path: /etc/kubernetes/kubelet.conf
+  register: k8s_kubelet_conf_probe
+
+- name: Resolve Kubernetes node name for this host
+  ansible.builtin.set_fact:
+    k8s_node_name: "{{ hostvars[inventory_hostname].hostname | default(inventory_hostname ~ '.' ~ dns_domain_suffix) }}"
+
+- name: Resolve target Kubernetes package version for this host
+  ansible.builtin.set_fact:
+    k8s_version_target_raw: >-
+      {{ k8s_version_ubuntu if ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+         else k8s_version_oracle }}
+    k8s_version_target_normalized: >-
+      {{
+        (k8s_version_ubuntu if ansible_facts['distribution'] in ['Ubuntu', 'Debian']
+         else k8s_version_oracle)
+        | regex_search('^([0-9]+\.[0-9]+\.[0-9]+)')
+      }}
+
+- name: Read installed kubeadm version
+  ansible.builtin.shell: kubeadm version -o short 2>/dev/null | sed 's/^v//'
+  register: k8s_kubeadm_current_cmd
+  changed_when: false
+  failed_when: false
+
+- name: Set per-host cluster lifecycle facts
+  ansible.builtin.set_fact:
+    k8s_api_node_names: "{{ hostvars[k8s_cluster_fact_host]['k8s_api_node_names'] | default([]) }}"
+    k8s_api_ready_node_names: "{{ hostvars[k8s_cluster_fact_host]['k8s_api_ready_node_names'] | default([]) }}"
+    k8s_cluster_exists: "{{ hostvars[k8s_cluster_fact_host]['k8s_cluster_exists'] | default(false) | bool }}"
+    k8s_kubelet_bootstrapped: "{{ k8s_kubelet_conf_probe.stat.exists | default(false) }}"
+    k8s_node_in_api: "{{ k8s_node_name in (hostvars[k8s_cluster_fact_host]['k8s_api_node_names'] | default([])) }}"
+    k8s_node_ready: "{{ k8s_node_name in (hostvars[k8s_cluster_fact_host]['k8s_api_ready_node_names'] | default([])) }}"
+    k8s_version_current_normalized: >-
+      {{ (k8s_kubeadm_current_cmd.stdout | default('') | trim)
+         | regex_search('^([0-9]+\.[0-9]+\.[0-9]+)')
+         | default('', true) }}
+    k8s_needs_init: >-
+      {{
+        (not (hostvars[k8s_cluster_fact_host]['k8s_cluster_exists'] | default(false) | bool))
+        and inventory_hostname == groups[k8s_master_hosts][0]
+      }}
+    k8s_needs_join_recovery: >-
+      {{
+        inventory_hostname in (groups.get(k8s_master_hosts, []) + groups.get(k8s_worker_hosts, []))
+        and (hostvars[k8s_cluster_fact_host]['k8s_cluster_exists'] | default(false) | bool)
+        and not (k8s_node_name in (hostvars[k8s_cluster_fact_host]['k8s_api_node_names'] | default([])))
+        and (k8s_kubelet_conf_probe.stat.exists | default(false))
+      }}
+    k8s_needs_join: >-
+      {{
+        inventory_hostname in (groups.get(k8s_master_hosts, []) + groups.get(k8s_worker_hosts, []))
+        and not (k8s_node_name in (hostvars[k8s_cluster_fact_host]['k8s_api_node_names'] | default([])))
+        and (
+          not (k8s_kubelet_conf_probe.stat.exists | default(false))
+          or (
+            (k8s_kubelet_conf_probe.stat.exists | default(false))
+            and (hostvars[k8s_cluster_fact_host]['k8s_cluster_exists'] | default(false) | bool)
+          )
+        )
+      }}
+    k8s_is_control_plane_join: "{{ inventory_hostname in (groups.get(k8s_master_hosts, [])[1:] | default([])) }}"
+    k8s_needs_upgrade: false
+
+- name: Compute upgrade requirement from package target vs kubeadm
+  ansible.builtin.set_fact:
+    k8s_needs_upgrade: >-
+      {{
+        (k8s_version_target_normalized | length > 0)
+        and (k8s_version_current_normalized | length > 0)
+        and (k8s_version_target_normalized is version(k8s_version_current_normalized, '>'))
+        and (hostvars[k8s_cluster_fact_host]['k8s_cluster_exists'] | default(false) | bool)
+      }}
+    k8s_upgrade_target: "v{{ k8s_version_target_normalized }}"
+
+- name: Fail on unsupported Kubernetes downgrade
+  ansible.builtin.assert:
+    that:
+      - not (
+          (k8s_version_target_normalized | length > 0)
+          and (k8s_version_current_normalized | length > 0)
+          and (k8s_version_target_normalized is version(k8s_version_current_normalized, '<'))
+        )
+    fail_msg: >-
+      Downgrade is not supported: target {{ k8s_version_target_normalized }}
+      < current {{ k8s_version_current_normalized }} on {{ inventory_hostname }}
+
+- name: Publish cluster-wide join and upgrade flags
+  ansible.builtin.set_fact:
+    k8s_any_needs_join: >-
+      {{
+        (groups.get(k8s_master_hosts, []) + groups.get(k8s_worker_hosts, []))
+        | map('extract', hostvars)
+        | selectattr('k8s_needs_join', 'defined')
+        | selectattr('k8s_needs_join')
+        | list
+        | length > 0
+      }}
+    k8s_any_needs_control_plane_join: >-
+      {{
+        groups.get(k8s_master_hosts, [])[1:]
+        | map('extract', hostvars)
+        | selectattr('k8s_needs_join', 'defined')
+        | selectattr('k8s_needs_join')
+        | list
+        | length > 0
+      }}
+    k8s_any_needs_upgrade: >-
+      {{
+        (groups.get(k8s_master_hosts, []) + groups.get(k8s_worker_hosts, []))
+        | map('extract', hostvars)
+        | selectattr('k8s_needs_upgrade', 'defined')
+        | selectattr('k8s_needs_upgrade')
+        | list
+        | length > 0
+      }}
+  delegate_to: "{{ k8s_cluster_fact_host }}"
+  connection: local
+  become: false
+  delegate_facts: true
+  run_once: true
+
+- name: Debug cluster lifecycle facts
+  ansible.builtin.debug:
+    msg:
+      host: "{{ inventory_hostname }}"
+      k8s_node_name: "{{ k8s_node_name }}"
+      k8s_cluster_exists: "{{ k8s_cluster_exists }}"
+      k8s_needs_init: "{{ k8s_needs_init }}"
+      k8s_needs_join: "{{ k8s_needs_join }}"
+      k8s_needs_join_recovery: "{{ k8s_needs_join_recovery | default(false) }}"
+      k8s_needs_upgrade: "{{ k8s_needs_upgrade }}"
+      k8s_node_in_api: "{{ k8s_node_in_api }}"
+      k8s_node_ready: "{{ k8s_node_ready }}"
+      k8s_kubelet_bootstrapped: "{{ k8s_kubelet_bootstrapped }}"
+      k8s_version_target: "{{ k8s_version_target_normalized }}"
+      k8s_version_current: "{{ k8s_version_current_normalized }}"
+      k8s_any_needs_join: "{{ hostvars[k8s_cluster_fact_host]['k8s_any_needs_join'] | default(false) }}"
+      k8s_any_needs_upgrade: "{{ hostvars[k8s_cluster_fact_host]['k8s_any_needs_upgrade'] | default(false) }}"

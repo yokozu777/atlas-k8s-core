@@ -1,0 +1,239 @@
+# atlas-k8s-core — variable catalog for standalone runs
+# =====================================================
+# Role defaults under roles/*/defaults/main.yml are the SoT for deep tunables
+# (LB packages, nginx stream, containerd mirrors, sync_time, kubeadm SANs).
+# This file is the documented operator surface that must satisfy 01_validate_vars.
+# Workspace dirs are created by role 00_ensure_workspace (tag always).
+#
+# Secrets: see group_vars/all/atlas-k8s-core.secrets.yml (Vault-friendly).
+# Standalone alternative: EXTRA_VARS_FILE=examples/secrets.example.yml
+
+# --------------------------------------------
+# REQUIRED — must be set for a real deploy
+# --------------------------------------------
+
+# Inventory group targeting (override to rename groups in inventory)
+k8s_lb_hosts: k8s_lbs
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+
+# Identity / DNS
+dns_domain_suffix: example.com
+cluster_domain: k8s.example.com
+k8s_cluster_domain: "{{ cluster_domain }}"
+k8s_cluster_name: atlas
+k8s_dns_domain: cluster.local
+k8s_lb_hostname: kubelb
+k8s_api_port: 6443
+control_plane_endpoint: "{{ k8s_lb_hostname }}.{{ dns_domain_suffix }}:{{ k8s_api_port }}"
+
+# SSH / node admin
+ansible_user: localuser
+admin_user: "{{ ansible_user }}"  # orchestrated leaf alias (atlas-node-foundation)
+k8s_admin_user: "{{ ansible_user }}"
+k8s_admin_home: "/home/{{ k8s_admin_user }}"
+k8s_node_kubeconfig: "{{ k8s_admin_home }}/.kube/config"
+k8s_copy_kubeconfig_to_admin_home: false
+
+# Controller workspace (role 00_ensure_workspace)
+# cluster_workspace_id must equal k8s_cluster_domain (validate contract).
+# Prefer CLUSTER_WORKSPACE_PARENT / CLUSTER_WORKSPACE_ROOT from ./run.sh (absolute paths).
+cluster_workspace_id: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ID') | default(k8s_cluster_domain, true) }}"
+cluster_workspace_parent: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_PARENT') | default('./workspace', true) }}"
+cluster_workspace_root: "{{ lookup('ansible.builtin.env', 'CLUSTER_WORKSPACE_ROOT') | default(cluster_workspace_parent ~ '/' ~ cluster_workspace_id, true) }}"
+
+controller_workspace: "{{ cluster_workspace_root }}/controller-state"
+controller_manifests_dir: "{{ controller_workspace }}/manifests"
+controller_reports_dir: "{{ controller_workspace }}/reports"
+controller_kubeconfig: "{{ controller_workspace }}/kubeconfig/admin.conf"
+# Platform aliases used by roles on Ansible controller
+k8s_kubeconfig: "{{ controller_kubeconfig }}"
+k8s_manifests_dir: "{{ controller_manifests_dir }}"
+controller_python_venv: "{{ controller_workspace }}/venv"
+controller_bin_dir: "{{ controller_workspace }}/bin"
+controller_helm_config_dir: "{{ controller_workspace }}/helm-config"
+controller_ca_cert_dir: "{{ controller_workspace }}/certs"
+k8s_ca_cert_filename: ca.crt
+controller_ca_cert_path: "{{ controller_ca_cert_dir }}/{{ k8s_ca_cert_filename }}"
+controller_ssl_cert_file: "{{ controller_ca_cert_dir }}/ca-bundle.crt"
+controller_tls_environment: "{{
+  {
+    'SSL_CERT_FILE': controller_ssl_cert_file,
+    'REQUESTS_CA_BUNDLE': controller_ssl_cert_file,
+    'GIT_SSL_CAINFO': controller_ssl_cert_file
+  } if (pki_ca_url | default('') | length > 0) else {}
+}}"
+k8s_ca_cert_path: "{{ k8s_manifests_dir }}/{{ k8s_ca_cert_filename }}"
+controller_staging_dir: "{{ controller_workspace }}/staging"
+controller_secrets_dir: "{{ controller_workspace }}/secrets"
+k8s_control_plane_scripts_dir: "{{ controller_workspace }}/scripts"
+k8s_cluster_fact_host: localhost
+k8s_kubeadm_admin_kubeconfig: /etc/kubernetes/admin.conf
+# Node-side python for break-glass; controller helm uses controller_python_venv / PATH
+k8s_python_venv: /opt/myenv
+
+# Workspace layout stubs required by validate (provision/keycloak/LB DNS paths under workspace)
+keycloak_tf_workspace: "{{ controller_staging_dir }}/keycloak-realm"
+k8s_lb_dns_tf_workspace: "{{ controller_staging_dir }}/lb-vip-dns"
+k8s_kibana_chart_dir: "{{ controller_staging_dir }}/kibana"
+# Durable TF state (ADR 001): <local_dir>/tfstate/<cluster_id>/
+# Standalone default local_dir = tfstate-repo; org inventory-SoT leaves override.
+provision_tf_state_local_dir: "{{ atlas_cluster_root | default('.', true) }}/tfstate-repo"
+provision_tf_state_repo_prefix: tfstate
+provision_tf_state_cluster_path: "{{ provision_tf_state_repo_prefix }}/{{ cluster_id | default(cluster_workspace_id, true) }}"
+provision_tf_state_repo_dir: "{{ provision_tf_state_local_dir }}/{{ provision_tf_state_cluster_path }}"
+provision_tf_workspace_dir: "{{ cluster_workspace_root }}/tf_workspace"
+provision_generated_variables_tf: "{{ cluster_workspace_root }}/generated/variables.tf"
+build_workdir: "{{ cluster_workspace_root }}/build/workspace"
+build_state_file: "{{ cluster_workspace_root }}/build/build_templates_state.json"
+
+# First control-plane host (29_fetch_kubeconfig SSH from controller)
+k8s_control_plane_master_host: "{{ groups.get(k8s_master_hosts, []) | first | default('', true) }}"
+k8s_control_plane_ssh_user: "{{ k8s_admin_user }}"
+k8s_control_plane_ssh_target: "{{ k8s_control_plane_ssh_user }}@{{ k8s_control_plane_master_host }}"
+k8s_control_plane_ssh_private_key_file: >-
+  {{
+    lookup('ansible.builtin.env', 'ANSIBLE_PRIVATE_KEY_FILE', default='')
+    | default(lookup('ansible.builtin.env', 'SSH_KEY', default=''), true)
+    | default(ansible_ssh_private_key_file | default(''), true)
+  }}
+k8s_control_plane_ssh_extra_args: []
+
+# API VIP (Keepalived on k8s_lb_hosts) — vip_auth_pass → atlas-k8s-core.secrets.yml
+vip_address: "192.168.1.210"
+# "" = auto default IPv4 NIC on each LB (mixed-OS: ens18 vs eth0)
+keepalived_interface: ""
+keepalived_virtual_router_id: 100
+
+# kubeadm API server certificate SANs
+k8s_api_cert_sans:
+  - "{{ vip_address }}"
+  - "{{ k8s_lb_hostname }}.{{ dns_domain_suffix }}"
+
+# Networking (kubeadm)
+pod_subnet: 172.16.0.0/16
+service_subnet: 10.0.0.0/12
+
+# Kubernetes package versions
+k8s_apt_repo_version: "1.36"
+k8s_version_ubuntu: "1.36.2-2.1"
+k8s_version_oracle: "1.36.2"
+
+# PKI / package-repo placeholders (required by validate even when modes are none)
+# Replace with your CA / mirror URLs for a real deploy.
+pki_ca_url:
+  - "https://ca.example.com:8443/roots.pem"
+nexus_host: nexus.example.com
+nexus_base_url: "https://{{ nexus_host }}/repository"
+# Required by validate when use_internal_docker_registry=harbor
+harbor_host: images.example.com
+harbor_mirror_base: "https://{{ harbor_host }}/v2"
+
+# --------------------------------------------
+# OPTIONAL — safe defaults (override as needed)
+# --------------------------------------------
+
+# Image pull for nodes (standalone: public upstreams)
+use_internal_docker_registry: none
+setup_registry: false
+setup_registry_nginx: false
+
+# Package URI bake (Phase 4): base → nginx domain → public
+# Set pkg_repo_base for an internal repository root, or pkg_repo_nginx_ingress_domain for nginx mirrors.
+pkg_repo_base: ""
+pkg_repo_nginx_ingress_domain: ""
+pkg_repo_upstreams: []
+
+# Time sync (03_sync_time)
+ntp_servers:
+  - 0.pool.ntp.org
+  - 1.pool.ntp.org
+sync_time_max_offset_seconds: 1.0
+sync_time_settle_seconds: 10
+sync_time_hard_step_threshold_seconds: 60
+sync_time_probe_timeout_seconds: 30
+
+# Keepalived / LB tunables (role 10_lb)
+keepalived_router_id: LVS_LB
+keepalived_master_priority: 200
+keepalived_vrrp_instance: VI_1
+keepalived_advert_int: 1
+nginx_stream_module_path: /usr/lib/nginx/modules/ngx_stream_module.so
+lb_packages_debian:
+  - libnginx-mod-stream
+  - keepalived
+lb_packages_oracle:
+  - keepalived
+  - nginx-mod-stream
+  - policycoreutils-python-utils
+lb_firewalld_zone: public
+lb_firewalld_ports:
+  - 22/tcp
+  - "{{ k8s_api_port }}/tcp"
+lb_services:
+  - nginx.service
+  - keepalived.service
+nginx_worker_connections: 2048
+nginx_stream_lb_method: random two least_conn
+nginx_proxy_timeout: 300s
+nginx_proxy_connect_timeout: 60s
+nginx_upstream_max_fails: 3
+nginx_upstream_fail_timeout: 30s
+
+# Optional: Terraform RFC2136 A for {{ k8s_lb_hostname }} → vip_address (role 09_lb_vip_dns).
+# When false (default), leave apex A to BIND / manual DNS. Reuses provision_dns_* when set.
+# Do not enable both TF and BIND for the same hostname.
+k8s_lb_dns_tf_manage_a_record: false
+k8s_lb_dns_server: "{{ dns_server_ip | default(provision_dns_server | default(''), true) }}"
+k8s_lb_dns_zone: "{{ dns_domain_suffix }}."
+k8s_lb_dns_key_name: "{{ dns_domain_suffix }}."
+k8s_lb_dns_key_algorithm: hmac-sha256
+k8s_lb_dns_transport: tcp4
+k8s_lb_dns_a_ttl: 300
+# k8s_lb_dns_key_secret → atlas-k8s-core.secrets.yml (or provision_dns_key_secret)
+
+# Node package pins (11_k8s_hosts) — override majors with k8s_version_*
+k8s_packages_ubuntu:
+  - "kubelet={{ k8s_version_ubuntu }}"
+  - "kubeadm={{ k8s_version_ubuntu }}"
+  - "kubectl={{ k8s_version_ubuntu }}"
+  - containerd.io
+  - ipset
+  - ipvsadm
+k8s_packages_oracle:
+  - "kubelet-{{ k8s_version_oracle }}"
+  - "kubeadm-{{ k8s_version_oracle }}"
+  - "kubectl-{{ k8s_version_oracle }}"
+  - containerd.io
+  - ipset
+  - ipvsadm
+  - python3-dnf-plugin-versionlock
+
+# containerd registry mirrors (11_k8s_hosts) — used when use_internal_docker_registry != none
+containerd_registry_mirrors:
+  - { dir_name: docker.io, server: "https://registry-1.docker.io", mirror_path: docker-hub }
+  - { dir_name: registry.k8s.io, server: "https://registry.k8s.io", mirror_path: k8s.io }
+  - { dir_name: gcr.io, server: "https://gcr.io", mirror_path: gcr.io }
+  - { dir_name: ghcr.io, server: "https://ghcr.io", mirror_path: ghcr.io }
+  - { dir_name: quay.io, server: "https://quay.io", mirror_path: quay.io }
+  # Docker Hub vanity: share docker.io pull-through (hosts.toml slug from mirror_path).
+  - { dir_name: cr.fluentbit.io, server: "https://registry-1.docker.io", mirror_path: docker.io }
+  # GHCR vanity: share ghcr.io pull-through (hosts.toml slug from mirror_path).
+  - { dir_name: reg.kyverno.io, server: "https://ghcr.io", mirror_path: ghcr.io }
+
+# Worker kernel modules (12_workers_kernel_rbd / 11_k8s_hosts)
+kernel_modules:
+  - overlay
+  - br_netfilter
+  - ip_vs
+  - ip_vs_rr
+  - ip_vs_wrr
+  - ip_vs_sh
+  - nf_conntrack
+  - iptable_nat
+  - ip_tables
+  - xt_addrtype
+  - xt_comment
+
+# Optional documented pin (roles may not require it)
+etcd_version: v3.6.12

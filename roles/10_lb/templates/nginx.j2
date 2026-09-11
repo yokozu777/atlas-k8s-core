@@ -1,0 +1,44 @@
+user nginx;
+worker_processes auto;
+error_log /var/log/nginx/error.log;
+pid /run/nginx.pid;
+
+{% if ansible_facts['distribution'] == 'Ubuntu' or ansible_facts['distribution'] == 'Debian' %}
+load_module {{ nginx_stream_module_path }};
+#{% elif ansible_facts['distribution'] == 'OracleLinux' %}
+#load_module /usr/lib64/nginx/modules/ngx_stream_module.so;
+{% endif %}
+
+# Load dynamic modules. See /usr/share/doc/nginx/README.dynamic.
+include /usr/share/nginx/modules/*.conf;
+
+events {
+
+    worker_connections {{ nginx_worker_connections }};
+
+}
+
+stream {
+
+    upstream stream_backend {
+
+        # Load balance algorithm
+        {{ nginx_stream_lb_method }};
+
+{% for item in groups[k8s_master_hosts] %}
+        server {{ hostvars[item].hostname | default(item ~ '.' ~ dns_domain_suffix) }}:{{ k8s_api_port }} max_fails={{ nginx_upstream_max_fails }} fail_timeout={{ nginx_upstream_fail_timeout }};
+{% endfor %}
+
+    }
+
+    server {
+
+        listen                  {{ k8s_api_port }};
+        proxy_pass              stream_backend;
+
+        proxy_timeout           {{ nginx_proxy_timeout }};
+        proxy_connect_timeout   {{ nginx_proxy_connect_timeout }};
+
+    }
+
+}

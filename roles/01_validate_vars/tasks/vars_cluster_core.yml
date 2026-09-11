@@ -1,0 +1,44 @@
+---
+- name: Assert required cluster variables are set (core bootstrap)
+  ansible.builtin.assert:
+    that:
+      - dns_domain_suffix | default('') | length > 0
+      - k8s_cluster_domain | default('') | length > 0
+      - vip_address | default('') | length > 0
+      - nexus_base_url | default('') | length > 0
+      - k8s_admin_user | default('') | length > 0
+      - pki_ca_url | default('') | length > 0
+      - control_plane_endpoint | default('') | length > 0
+      - k8s_version_ubuntu | default('') | length > 0
+      - k8s_version_oracle | default('') | length > 0
+      - k8s_dns_domain | default('') | length > 0
+      - k8s_apt_repo_version | default('') | length > 0
+      - pod_subnet | default('') | length > 0
+      - service_subnet | default('') | length > 0
+      - k8s_cluster_name | default('') | length > 0
+      - k8s_lb_hostname | default('') | length > 0
+      - k8s_api_port | default(0) | int > 0
+      - keepalived_interface is defined
+      - keepalived_virtual_router_id | default(0) | int > 0
+      - k8s_api_cert_sans is defined
+      - k8s_api_cert_sans | length > 0
+      - k8s_admin_home | default('') | length > 0
+      - k8s_ca_cert_filename | default('') | length > 0
+    fail_msg: >-
+      Core cluster bootstrap variables missing — check group_vars/all/atlas-k8s-core.yml
+      (kubeadm, LB, hosts, networking, k8s_api_cert_sans).
+      keepalived_interface may be "" to auto-pick ansible_default_ipv4.interface
+      (mixed-OS: ens18 vs eth0).
+
+- name: Assert LB VIP DNS Terraform TSIG when enabled
+  ansible.builtin.assert:
+    that:
+      - k8s_lb_dns_server | default('') | length > 0
+      - k8s_lb_dns_zone | default('') | length > 0
+      - k8s_lb_dns_key_name | default('') | length > 0
+      - k8s_lb_dns_key_secret | default('') | length > 0
+      - k8s_lb_dns_key_secret | default('') != 'CHANGEME'
+    fail_msg: >-
+      k8s_lb_dns_tf_manage_a_record=true requires RFC2136 TSIG
+      (k8s_lb_dns_* or provision_dns_*); key secret must not be CHANGEME.
+  when: k8s_lb_dns_tf_manage_a_record | default(false) | bool

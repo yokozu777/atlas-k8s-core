@@ -1,0 +1,29 @@
+k8s_packages_ubuntu:
+  - kubelet={{ k8s_version_ubuntu }}
+  - kubeadm={{ k8s_version_ubuntu }}
+  - kubectl={{ k8s_version_ubuntu }}
+  - containerd.io
+  - ipset
+  - ipvsadm
+
+k8s_packages_oracle:
+  - kubelet-{{ k8s_version_oracle }}
+  - kubeadm-{{ k8s_version_oracle }}
+  - kubectl-{{ k8s_version_oracle }}
+  - containerd.io
+  - ipset
+  - ipvsadm
+  - python3-dnf-plugin-versionlock
+
+kernel_modules:
+  - overlay
+  - br_netfilter
+  - ip_vs
+  - ip_vs_rr
+  - ip_vs_wrr
+  - ip_vs_sh
+  - nf_conntrack
+  - iptable_nat
+  - ip_tables
+  - xt_addrtype
+  - xt_comment

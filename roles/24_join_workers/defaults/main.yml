@@ -1,0 +1,6 @@
+---
+# Inventory group targeting (must match playbook / group_vars/all/atlas-k8s-core.yml).
+k8s_master_hosts: k8s_masters
+k8s_worker_hosts: k8s_workers
+k8s_admin_home: "/home/{{ k8s_admin_user | default('localuser') }}"
+k8s_kubeadm_admin_kubeconfig: /etc/kubernetes/admin.conf
