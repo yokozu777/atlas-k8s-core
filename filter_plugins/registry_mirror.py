@@ -13,15 +13,29 @@ def _slug(dir_name):
     return slug.replace(".", "-")
 
 
+def _server_host(server):
+    text = server or ""
+    prefix = "https://"
+    if text.startswith(prefix):
+        text = text[len(prefix):]
+    return text.split("/", 1)[0]
+
+
 def _registry_slug(item):
     server = (item or {}).get("server", "")
     dir_name = (item or {}).get("dir_name", "")
     mirror_path = (item or {}).get("mirror_path") or ""
     if _VALID_UPSTREAM.match(server):
-        # Vanity registries (reg.kyverno.io → ghcr.io, cr.fluentbit.io → docker.io)
-        # share the pull-through of mirror_path. Do not slug dir_name — that vhost
-        # is never created.
-        if "." in mirror_path and mirror_path != dir_name:
+        # nginx always slugs dir_name (registry.k8s.io → registry-k8s-io).
+        # mirror_path is a Harbor path (k8s.io, elastic.co) on that same vhost.
+        # Slug mirror_path only for a vanity name whose server is a different
+        # registry, so the pull shares that registry's vhost
+        # (cr.fluentbit.io → docker.io, reg.kyverno.io → ghcr.io, yandex → cr.yandex).
+        if (
+            _server_host(server) != dir_name
+            and "." in mirror_path
+            and mirror_path != dir_name
+        ):
             return _slug(mirror_path)
         return _slug(dir_name)
     if mirror_path == "docker-hub":

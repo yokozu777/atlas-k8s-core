@@ -512,6 +512,52 @@ class RegistryMirrorFilterTest(unittest.TestCase):
             "https://docker-io.registry.example.com",
         )
 
+    def test_k8s_registry_slug_matches_nginx_vhost(self) -> None:
+        self.assertEqual(
+            self._endpoint(
+                {
+                    "dir_name": "registry.k8s.io",
+                    "server": "https://registry.k8s.io",
+                    "mirror_path": "k8s.io",
+                }
+            ),
+            "https://registry-k8s-io.registry.example.com",
+        )
+
+    def test_harbor_path_does_not_replace_dir_name_vhost(self) -> None:
+        self.assertEqual(
+            self._endpoint(
+                {
+                    "dir_name": "docker.elastic.co",
+                    "server": "https://docker.elastic.co",
+                    "mirror_path": "elastic.co",
+                }
+            ),
+            "https://docker-elastic-co.registry.example.com",
+        )
+        self.assertEqual(
+            self._endpoint(
+                {
+                    "dir_name": "public.ecr.aws",
+                    "server": "https://public.ecr.aws",
+                    "mirror_path": "ecr.aws",
+                }
+            ),
+            "https://public-ecr-aws.registry.example.com",
+        )
+
+    def test_yandex_vanity_shares_cr_yandex_vhost(self) -> None:
+        self.assertEqual(
+            self._endpoint(
+                {
+                    "dir_name": "yandex",
+                    "server": "https://cr.yandex",
+                    "mirror_path": "cr.yandex",
+                }
+            ),
+            "https://cr-yandex.registry.example.com",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
