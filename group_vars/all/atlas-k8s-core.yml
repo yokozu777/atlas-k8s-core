@@ -190,7 +190,7 @@ k8s_lb_dns_key_name: "{{ dns_domain_suffix }}."
 k8s_lb_dns_key_algorithm: hmac-sha256
 k8s_lb_dns_transport: tcp4
 k8s_lb_dns_a_ttl: 300
-# k8s_lb_dns_key_secret → atlas-k8s-core.secrets.yml (or provision_dns_key_secret)
+# k8s_lb_dns_key_secret follows provision_dns_key_secret (role 09 defaults).
 
 # Node package pins (11_k8s_hosts) — override majors with k8s_version_*
 k8s_packages_ubuntu:
