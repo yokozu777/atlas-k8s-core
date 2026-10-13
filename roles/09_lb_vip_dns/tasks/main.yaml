@@ -17,9 +17,12 @@
       - k8s_lb_dns_key_secret | default('') | length > 0
       - k8s_lb_dns_key_secret | default('') != 'CHANGEME'
       - k8s_lb_dns_tf_workspace | default('') | length > 0
+      - provision_tf_provider_dns_version | default('') | length > 0
     fail_msg: >-
       k8s_lb_dns_tf_manage_a_record=true requires k8s_lb_hostname, vip_address,
-      and RFC2136 TSIG (k8s_lb_dns_* or provision_dns_*). Set key secret
+      RFC2136 TSIG (k8s_lb_dns_* or provision_dns_*), and
+      provision_tf_provider_dns_version (SoT: atlas-compute-provision
+      provision_defaults.yml via clusterctl materialize). Set key secret
       (not CHANGEME) and DNS server/zone.
 
 - name: Ensure LB VIP DNS Terraform workspace exists
